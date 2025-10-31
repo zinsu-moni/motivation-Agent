@@ -277,6 +277,10 @@ async def a2a_motivation(request: Request):
                     # Common token locations
                     auth = pnc_config.get('authentication') or {}
                     token = None
+                    
+                    # Debug: log what auth data we received
+                    logger.debug('Push notification auth config: %s', auth)
+                    
                     # Look for obvious token names
                     for k in ('token', 'accessToken', 'access_token', 'bearer', 'api_key', 'key'):
                         if isinstance(auth, dict) and auth.get(k):
@@ -288,8 +292,15 @@ async def a2a_motivation(request: Request):
                             if pnc_config.get(k):
                                 token = pnc_config.get(k)
                                 break
+                    
+                    # If no token found, the webhook URL itself might contain auth or we skip auth
+                    # Some Telex webhooks are public or use URL-based auth
                     if token:
                         headers['Authorization'] = f"Bearer {token}"
+                        logger.debug('Using Authorization header with bearer token')
+                    else:
+                        logger.warning('No bearer token found in pushNotificationConfig - webhook may require auth')
+                    
                     # Allow additional headers forwarded from pnc_config.headers
                     extra_headers = pnc_config.get('headers') or {}
                     if isinstance(extra_headers, dict):
@@ -311,8 +322,9 @@ async def a2a_motivation(request: Request):
                     logger.debug('Failed to record last push status')
 
             # Create push body that controllers commonly expect
-            # Some controllers expect the message directly, not wrapped in JSON-RPC
+            # Include the original request ID for correlation
             push_body = {
+                "id": rpc_id,  # Original request ID for correlation
                 "message": {
                     "kind": "message",
                     "role": "assistant",
