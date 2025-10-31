@@ -25,6 +25,7 @@
     <input id="apikey" type="text" placeholder="sk-... or leave blank to use server env var" />
 
     <div>
+      <label style="margin-right:8px"><input type="checkbox" id="useA2A" /> Use A2A POST</label>
       <button id="send">Send</button>
       <button id="clear">Clear</button>
     </div>
@@ -41,23 +42,47 @@
 
       send.addEventListener('click', async () => {
         responseEl.textContent = 'Waiting for response...';
-        const message = encodeURIComponent(document.getElementById('message').value || '');
+        const rawMessage = document.getElementById('message').value || '';
+        const message = encodeURIComponent(rawMessage);
         const key = document.getElementById('apikey').value.trim();
-        const url = `/motivation?message=${message}`;
+        const useA2A = document.getElementById('useA2A').checked;
 
         try {
-          const headers = {};
-          if (key) headers['X-API-KEY'] = key;
+          if (useA2A) {
+            const url = '/a2a/motivation';
+            const body = { input: rawMessage };
+            // Optionally include api_key in meta if provided
+            if (key) body.meta = { api_key: key };
 
-          const res = await fetch(url, { headers });
-          if (!res.ok) {
-            const text = await res.text();
-            responseEl.textContent = `Error ${res.status}: ${text}`;
-            return;
+            const res = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            });
+
+            if (!res.ok) {
+              const text = await res.text();
+              responseEl.textContent = `Error ${res.status}: ${text}`;
+              return;
+            }
+
+            const data = await res.json();
+            responseEl.textContent = JSON.stringify(data, null, 2);
+          } else {
+            const url = `/motivation?message=${message}`;
+            const headers = {};
+            if (key) headers['X-API-KEY'] = key;
+
+            const res = await fetch(url, { headers });
+            if (!res.ok) {
+              const text = await res.text();
+              responseEl.textContent = `Error ${res.status}: ${text}`;
+              return;
+            }
+
+            const data = await res.json();
+            responseEl.textContent = JSON.stringify(data, null, 2);
           }
-
-          const data = await res.json();
-          responseEl.textContent = JSON.stringify(data, null, 2);
         } catch (err) {
           responseEl.textContent = 'Network error: ' + err;
         }
