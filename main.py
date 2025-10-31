@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import os
 from services.OpenRouter import OpenRouterService
 import uuid
@@ -12,6 +13,15 @@ from pathlib import Path
 import logging
 
 app = FastAPI()
+
+# Allow CORS for development/testing so agent pages served from other origins can receive replies
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def clean_motivation(text: str) -> str:
