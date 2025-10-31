@@ -6,6 +6,9 @@ from services.OpenRouter import OpenRouterService
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
+import json
+from pathlib import Path
+import logging
 
 app = FastAPI()
 
@@ -61,6 +64,20 @@ async def a2a_motivation(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
+    # Sanitize payload for logging (mask api keys)
+    logger = logging.getLogger(__name__)
+    try:
+        sanitized = dict(payload) if isinstance(payload, dict) else payload
+        if isinstance(sanitized, dict):
+            meta = sanitized.get('meta')
+            if isinstance(meta, dict) and 'api_key' in meta:
+                meta['api_key'] = '***masked***'
+            if 'api_key' in sanitized:
+                sanitized['api_key'] = '***masked***'
+        logger.info('Received A2A payload: %s', sanitized)
+    except Exception:
+        logger.debug('Failed to sanitize A2A payload for logging')
+
     # Accept multiple keys for backwards compatibility
     user_message = None
     if isinstance(payload, dict):
@@ -101,4 +118,50 @@ async def a2a_motivation(request: Request):
     }
 
     return JSONResponse(status_code=200, content=response)
+
+
+@app.get("/workflow")
+async def get_workflow():
+    """Return the workflow JSON so you can confirm the deployed workflow."""
+    p = Path("workflow/workflow.json")
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="workflow.json not found")
+    try:
+        data = json.loads(p.read_text(encoding='utf-8'))
+        return JSONResponse(status_code=200, content=data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read workflow.json: {e}")
+
+
+@app.get("/health")
+async def health():
+    """Simple health endpoint reporting key presence, service init and workflow active flag."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    key_present = bool(api_key)
+    wf_path = Path("workflow/workflow.json")
+    wf_active = False
+    wf_id = None
+    if wf_path.exists():
+        try:
+            wf = json.loads(wf_path.read_text(encoding='utf-8'))
+            wf_active = bool(wf.get('active'))
+            wf_id = wf.get('id')
+        except Exception:
+            wf_active = False
+
+    # Try to initialize the service (won't call external API) to detect gross misconfigurations
+    service_init_ok = False
+    try:
+        _ = OpenRouterService(api_key=api_key)
+        service_init_ok = True
+    except Exception as e:
+        logging.getLogger(__name__).warning('Service init failed: %s', e)
+
+    return JSONResponse(status_code=200, content={
+        "ok": True,
+        "api_key_present": key_present,
+        "service_init_ok": service_init_ok,
+        "workflow_active": wf_active,
+        "workflow_id": wf_id
+    })
 
