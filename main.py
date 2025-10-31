@@ -321,12 +321,13 @@ async def a2a_motivation(request: Request):
                 }
             }
 
-            # Fire-and-forget the push so we don't block the A2A response; log will capture failures
+            # Actually await the push (with timeout) so we can ensure delivery and record status
             try:
-                asyncio.create_task(_post_push(push_url, push_body, pnc))
-            except Exception:
-                # Fallback: call without awaiting (best-effort)
-                _ = _post_push(push_url, push_body, pnc)
+                await asyncio.wait_for(_post_push(push_url, push_body, pnc), timeout=6.0)
+            except asyncio.TimeoutError:
+                logging.getLogger(__name__).warning('Push notification timed out after 6s')
+            except Exception as e:
+                logging.getLogger(__name__).exception('Error executing push notification: %s', e)
     except Exception:
         logging.getLogger(__name__).exception('Error preparing push notification')
 
