@@ -1,18 +1,26 @@
+import os
 import openai
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
-env = load_dotenv()
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+
 class OpenAIService:
-    def __init__(self):
-        openai.api_key = env['OPENAI_API_KEY']
+    def __init__(self, api_key: str = None):
+        # allow passing api_key at runtime (e.g., from request header) or fall back to env var
+        resolved_api_key = api_key or os.getenv('OPENAI_API_KEY')
+        base_url = os.getenv('OPENAI_BASE_URL')
+        if resolved_api_key:
+            openai.api_key = resolved_api_key
+
+        # create async client (some environments may not need base_url)
         self.client = openai.AsyncOpenAI(
-            api_key=env['OPENAI_API_KEY'],
-            base_url=env['OPENAI_BASE_URL']
+            api_key=resolved_api_key,
+            base_url=base_url
         )
     
     async def generate_motivation(self, user_message: str, user_id: str = None, db: AsyncSession = None) -> str:
@@ -135,3 +143,7 @@ class OpenAIService:
         except Exception as e:
             logger.error(f"Error generating reminder motivation: {e}")
             return f"Reminder: {reminder_text}\n\nYou've got this! Take action and make progress today"
+
+
+# Export an alias so other modules importing OpenRouterService keep working
+OpenRouterService = OpenAIService
