@@ -12,6 +12,45 @@ import logging
 
 app = FastAPI()
 
+
+def clean_motivation(text: str) -> str:
+    """Heuristic cleaner: remove common preamble phrases and return up to 3 sentences.
+
+    This helps remove model lead-ins like "You're seeking..." so callers get the actual motivational text.
+    """
+    if not text:
+        return text
+
+    import re
+
+    # Normalize whitespace
+    t = re.sub(r"\s+", " ", text).strip()
+
+    # Remove common preamble patterns
+    preamble_patterns = [
+        r"^it\s?sounds like\b.*?[.?!]\s*",
+        r"^you('?re| are)\s+seeking\b.*?[.?!]\s*",
+        r"^it\s+looks\s+like\b.*?[.?!]\s*",
+        r"^you\s+want\b.*?[.?!]\s*",
+        r"^you\s+are\s+looking\s+for\b.*?[.?!]\s*",
+        r"^i\s+understand\b.*?[.?!]\s*",
+    ]
+    for pat in preamble_patterns:
+        t = re.sub(pat, "", t, flags=re.IGNORECASE)
+
+    # Split into sentences (very simple heuristic)
+    sentences = re.split(r'(?<=[.!?])\s+', t)
+    # Keep up to first 3 non-empty sentences
+    kept = []
+    for s in sentences:
+        s = s.strip()
+        if s:
+            kept.append(s)
+        if len(kept) >= 3:
+            break
+
+    return " ".join(kept) if kept else t
+
 # Mount the static folder so you can open /static/index.html in the browser for testing
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -40,6 +79,11 @@ async def get_motivation(request: Request):
     try:
         logging.getLogger(__name__).info('Calling generate_motivation for message (truncated): %s', (user_message or '')[:200])
         quote = await openrouter_service.generate_motivation(user_message=user_message)
+        # Clean model preamble and limit to concise reply
+        try:
+            quote = clean_motivation(quote)
+        except Exception:
+            pass
         logging.getLogger(__name__).info('Received quote (truncated): %s', (quote or '')[:200])
     except Exception as e:
         # Log and return a 500-friendly message (service has its own fallbacks too)
