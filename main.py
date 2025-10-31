@@ -162,6 +162,11 @@ async def a2a_motivation(request: Request):
     try:
         sanitized = dict(payload) if isinstance(payload, dict) else payload
         if isinstance(sanitized, dict):
+            # Log the full params.configuration to see if there's a token we're missing
+            if 'params' in sanitized and isinstance(sanitized['params'], dict):
+                config = sanitized['params'].get('configuration', {})
+                logger.debug('Full configuration received: %s', config)
+            
             meta = sanitized.get('meta')
             if isinstance(meta, dict) and 'api_key' in meta:
                 meta['api_key'] = '***masked***'
@@ -275,11 +280,17 @@ async def a2a_motivation(request: Request):
                     # Determine headers for webhook POST
                     headers = {"Content-Type": "application/json"}
                     
-                    # Use the agent's API key for webhook authentication
-                    # This allows Telex to verify the response came from the authorized agent
-                    if agent_api_key:
-                        headers['Authorization'] = f"Bearer {agent_api_key}"
-                        logger.debug('Using agent API key for webhook authentication')
+                    # Use a dedicated webhook token if available (recommended)
+                    # Otherwise fall back to agent API key
+                    webhook_token = os.getenv('TELEX_WEBHOOK_TOKEN')
+                    if not webhook_token:
+                        webhook_token = agent_api_key
+                    
+                    if webhook_token:
+                        headers['Authorization'] = f"Bearer {webhook_token}"
+                        logger.debug('Using webhook authentication token')
+                    else:
+                        logger.warning('No webhook authentication token available')
 
                     logger.info('Posting push notification to %s', url)
                     async with httpx.AsyncClient(timeout=5.0) as client:
