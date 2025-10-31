@@ -38,9 +38,12 @@ async def get_motivation(request: Request):
 
     openrouter_service = OpenRouterService(api_key=api_key)
     try:
+        logging.getLogger(__name__).info('Calling generate_motivation for message (truncated): %s', (user_message or '')[:200])
         quote = await openrouter_service.generate_motivation(user_message=user_message)
+        logging.getLogger(__name__).info('Received quote (truncated): %s', (quote or '')[:200])
     except Exception as e:
         # Log and return a 500-friendly message (service has its own fallbacks too)
+        logging.getLogger(__name__).exception('generate_motivation failed: %s', e)
         return Response(content=f"Error generating motivation: {e}", status_code=500)
 
     return {"motivation": quote}

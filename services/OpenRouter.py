@@ -3,6 +3,7 @@ import openai
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
+import asyncio
 
 load_dotenv()
 
@@ -49,16 +50,29 @@ class OpenAIService:
             user_prompt = f"{user_context}User says: '{user_message}'\n\nProvide a motivational response that addresses their specific concern."
             
             model = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')
-            logger.debug(f"Using model {model} for generate_motivation")
-            response = await self.client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=150,
-                temperature=0.7
-            )
+            logger.info("Calling OpenAI model=%s for user_id=%s", model, user_id)
+            logger.debug("System prompt: %s", system_prompt[:400].replace('\n',' '))
+            logger.debug("User prompt (truncated): %s", (user_prompt or '')[:800])
+
+            # Wrap the async call with a timeout to avoid long hangs
+            try:
+                coro = self.client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    max_tokens=150,
+                    temperature=0.7
+                )
+                response = await asyncio.wait_for(coro, timeout=float(os.getenv('OPENAI_TIMEOUT', '15')))
+            except asyncio.TimeoutError:
+                logger.exception("OpenAI request timed out")
+                raise
+            except Exception as inner_e:
+                # Log detailed info then re-raise for outer handler
+                logger.exception("OpenAI request failed: %s", inner_e)
+                raise
             
             motivation = response.choices[0].message.content.strip()
             logger.info(f"Generated motivation for message: '{user_message[:50]}...'")
