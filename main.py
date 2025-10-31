@@ -59,13 +59,42 @@ async def a2a_motivation(request: Request):
 
     Returns A2A-like JSON with outputs array.
     """
+    # Robust parsing: accept JSON, form-encoded, or raw text bodies.
+    logger = logging.getLogger(__name__)
+    payload = None
+    raw_body = None
+    content_type = (request.headers.get('content-type') or '').lower()
     try:
-        payload = await request.json()
+        if 'application/json' in content_type:
+            payload = await request.json()
+        elif 'application/x-www-form-urlencoded' in content_type or 'multipart/form-data' in content_type:
+            form = await request.form()
+            # form is a starlette.datastructures.FormData; convert to dict
+            payload = {k: v for k, v in form.items()}
+        else:
+            # try JSON first, then fall back to raw text
+            try:
+                payload = await request.json()
+            except Exception:
+                raw_bytes = await request.body()
+                raw_body = raw_bytes.decode('utf-8', errors='replace')
+                # try to parse raw text as JSON
+                try:
+                    payload = json.loads(raw_body)
+                except Exception:
+                    # treat raw body as message text
+                    payload = {"input": raw_body}
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+        # Log raw body snippet for debugging (masked)
+        try:
+            raw = (await request.body()).decode('utf-8', errors='replace')
+            snippet = raw[:1000]
+            logger.info('Received invalid A2A body (could not parse): %s', snippet)
+        except Exception:
+            logger.debug('Failed to read raw body for logging')
+        raise HTTPException(status_code=400, detail="Invalid request payload")
 
     # Sanitize payload for logging (mask api keys)
-    logger = logging.getLogger(__name__)
     try:
         sanitized = dict(payload) if isinstance(payload, dict) else payload
         if isinstance(sanitized, dict):
