@@ -272,39 +272,11 @@ async def a2a_motivation(request: Request):
                     "error": None
                 }
                 try:
-                    # Determine headers: allow bearer token or custom headers if provided in pnc
+                    # Determine headers for webhook POST
                     headers = {"Content-Type": "application/json"}
-                    # Common token locations
-                    auth = pnc_config.get('authentication') or {}
-                    token = None
                     
-                    # Debug: log what auth data we received
-                    logger.debug('Push notification auth config: %s', auth)
-                    
-                    # Look for obvious token names
-                    for k in ('token', 'accessToken', 'access_token', 'bearer', 'api_key', 'key'):
-                        if isinstance(auth, dict) and auth.get(k):
-                            token = auth.get(k)
-                            break
-                    # Also check top-level pnc_config for 'token' keys
-                    if not token:
-                        for k in ('token', 'accessToken', 'access_token', 'bearer', 'api_key', 'key'):
-                            if pnc_config.get(k):
-                                token = pnc_config.get(k)
-                                break
-                    
-                    # If no token found, the webhook URL itself might contain auth or we skip auth
-                    # Some Telex webhooks are public or use URL-based auth
-                    if token:
-                        headers['Authorization'] = f"Bearer {token}"
-                        logger.debug('Using Authorization header with bearer token')
-                    else:
-                        logger.warning('No bearer token found in pushNotificationConfig - webhook may require auth')
-                    
-                    # Allow additional headers forwarded from pnc_config.headers
-                    extra_headers = pnc_config.get('headers') or {}
-                    if isinstance(extra_headers, dict):
-                        headers.update(extra_headers)
+                    # The webhook URL itself acts as authentication (it's a secret URL)
+                    # We don't need to add Authorization headers unless explicitly configured
 
                     logger.info('Posting push notification to %s', url)
                     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -321,15 +293,19 @@ async def a2a_motivation(request: Request):
                 except Exception:
                     logger.debug('Failed to record last push status')
 
-            # Create push body that controllers commonly expect
-            # Include the original request ID for correlation
+            # Create push body in A2A webhook format
+            # According to A2A spec: webhook receives the result directly
             push_body = {
-                "id": rpc_id,  # Original request ID for correlation
-                "message": {
-                    "kind": "message",
-                    "role": "assistant",
-                    "parts": [{"kind": "text", "text": cleaned}],
-                    "messageId": resp_id
+                "jsonrpc": "2.0",
+                "method": "message/response",
+                "params": {
+                    "requestId": rpc_id,
+                    "message": {
+                        "kind": "message",
+                        "role": "assistant",
+                        "parts": [{"kind": "text", "text": cleaned}],
+                        "messageId": resp_id
+                    }
                 }
             }
 
