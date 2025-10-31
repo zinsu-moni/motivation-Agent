@@ -251,6 +251,7 @@ async def a2a_motivation(request: Request):
     # Best-effort push callback: if caller provided a pushNotificationConfig.url, POST the result to it.
     try:
         push_url = None
+        pnc = {}
         if isinstance(payload, dict):
             params = payload.get('params') or {}
             config = params.get('configuration') or {}
@@ -258,17 +259,52 @@ async def a2a_motivation(request: Request):
             push_url = pnc.get('url')
 
         if push_url:
-            async def _post_push(url: str, body: dict, logger=logging.getLogger(__name__)):
+            async def _post_push(url: str, body: dict, pnc_config: dict, logger=logging.getLogger(__name__)):
+                last = {
+                    "ts": datetime.utcnow().isoformat() + 'Z',
+                    "url": url,
+                    "status": None,
+                    "resp": None,
+                    "error": None
+                }
                 try:
-                    # Small client with a short timeout so we don't hang the request
+                    # Determine headers: allow bearer token or custom headers if provided in pnc
+                    headers = {"Content-Type": "application/json"}
+                    # Common token locations
+                    auth = pnc_config.get('authentication') or {}
+                    token = None
+                    # Look for obvious token names
+                    for k in ('token', 'accessToken', 'access_token', 'bearer', 'api_key', 'key'):
+                        if isinstance(auth, dict) and auth.get(k):
+                            token = auth.get(k)
+                            break
+                    # Also check top-level pnc_config for 'token' keys
+                    if not token:
+                        for k in ('token', 'accessToken', 'access_token', 'bearer', 'api_key', 'key'):
+                            if pnc_config.get(k):
+                                token = pnc_config.get(k)
+                                break
+                    if token:
+                        headers['Authorization'] = f"Bearer {token}"
+                    # Allow additional headers forwarded from pnc_config.headers
+                    extra_headers = pnc_config.get('headers') or {}
+                    if isinstance(extra_headers, dict):
+                        headers.update(extra_headers)
+
+                    logger.info('Posting push notification to %s', url)
                     async with httpx.AsyncClient(timeout=5.0) as client:
-                        # Avoid sending secrets unless explicitly required — include content only
-                        headers = {"Content-Type": "application/json"}
-                        logger.info('Posting push notification to %s', url)
                         resp = await client.post(url, json=body, headers=headers)
-                        logger.info('Push notification posted: %s %s', resp.status_code, resp.text[:300])
+                        last['status'] = resp.status_code
+                        last['resp'] = (resp.text or '')[:1000]
+                        logger.info('Push notification posted: %s %s', resp.status_code, last['resp'][:300])
                 except Exception as e:
+                    last['error'] = str(e)
                     logger.exception('Failed to post push notification to %s: %s', url, e)
+                # store the last push attempt in-memory for quick diagnostics
+                try:
+                    _LAST_PUSH['last'] = last
+                except Exception:
+                    logger.debug('Failed to record last push status')
 
             # Create push body that controllers commonly expect (mirrors the returned result)
             push_body = {
@@ -277,12 +313,18 @@ async def a2a_motivation(request: Request):
                 "result": response
             }
 
+            # Ensure global store exists
+            try:
+                _LAST_PUSH
+            except NameError:
+                _LAST_PUSH = {}
+
             # Fire-and-forget the push so we don't block the A2A response; log will capture failures
             try:
-                asyncio.create_task(_post_push(push_url, push_body))
+                asyncio.create_task(_post_push(push_url, push_body, pnc))
             except Exception:
-                # Fallback: run it without awaiting (best-effort)
-                _ = _post_push(push_url, push_body)
+                # Fallback: call without awaiting (best-effort)
+                _ = _post_push(push_url, push_body, pnc)
     except Exception:
         logging.getLogger(__name__).exception('Error preparing push notification')
 
@@ -360,6 +402,15 @@ async def diag_openrouter():
         sample = await svc.generate_motivation(user_message="test authentication ping")
         # return a short snippet so logs don't leak large content
         return JSONResponse(status_code=200, content={"ok": True, "sample": (sample or '')[:500]})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@app.get("/diag/lastpush")
+async def diag_lastpush():
+    """Return the last push notification attempt recorded by the server (for debugging webhooks)."""
+    try:
+        return JSONResponse(status_code=200, content={"ok": True, "last_push": _LAST_PUSH.get('last') if isinstance(_LAST_PUSH, dict) else None})
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
