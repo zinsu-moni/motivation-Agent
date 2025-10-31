@@ -26,6 +26,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Global store for last push notification attempt (for diagnostics)
+_LAST_PUSH = {}
+
 
 def clean_motivation(text: str) -> str:
     """Heuristic cleaner: remove common preamble phrases and return up to 3 sentences.
@@ -307,18 +310,16 @@ async def a2a_motivation(request: Request):
                 except Exception:
                     logger.debug('Failed to record last push status')
 
-            # Create push body that controllers commonly expect (mirrors the returned result)
+            # Create push body that controllers commonly expect
+            # Some controllers expect the message directly, not wrapped in JSON-RPC
             push_body = {
-                "jsonrpc": "2.0",
-                "id": resp_id,
-                "result": response
+                "message": {
+                    "kind": "message",
+                    "role": "assistant",
+                    "parts": [{"kind": "text", "text": cleaned}],
+                    "messageId": resp_id
+                }
             }
-
-            # Ensure global store exists
-            try:
-                _LAST_PUSH
-            except NameError:
-                _LAST_PUSH = {}
 
             # Fire-and-forget the push so we don't block the A2A response; log will capture failures
             try:
