@@ -10,11 +10,20 @@
     {
       "id": "motivation_agent_node",
       "name": "motivation agent",
-      "parameters": {},
+      "parameters": {
+        "method": "POST",
+        "content_type": "application/json",
+        "auth": "header:X-API-KEY | payload.meta.api_key | env:OPENAI_API_KEY",
+        "description": "A2A-compatible HTTP endpoint that accepts { input | message } and returns outputs[].",
+        "auto_respond": true,
+        "respond_immediately": true,
+        "clarify_if_missing": false,
+        "behaviour_notes": "If input is provided, do NOT ask follow-up clarification questions — immediately generate a concise (1-3 sentence) motivational response tailored to the input. If input is empty, generate a general motivational message. Only ask clarifying questions if the user explicitly requests a clarification."
+      },
       "position": [816, -112],
-      "type": "a2a/motivo-a2a-node",
+      "type": "a2a/http-endpoint",
       "typeVersion": 1,
-      "url": "https://example.com/a2a/agent/motivationAgent"
+      "url": "/a2a/motivation"
     }
   ],
   "pinData": {},
