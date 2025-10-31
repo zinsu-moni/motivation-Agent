@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from services.OpenRouter import OpenRouterService
 import uuid
+import asyncio
+import httpx
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -245,6 +247,44 @@ async def a2a_motivation(request: Request):
             }
         ]
     }
+
+    # Best-effort push callback: if caller provided a pushNotificationConfig.url, POST the result to it.
+    try:
+        push_url = None
+        if isinstance(payload, dict):
+            params = payload.get('params') or {}
+            config = params.get('configuration') or {}
+            pnc = config.get('pushNotificationConfig') or {}
+            push_url = pnc.get('url')
+
+        if push_url:
+            async def _post_push(url: str, body: dict, logger=logging.getLogger(__name__)):
+                try:
+                    # Small client with a short timeout so we don't hang the request
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        # Avoid sending secrets unless explicitly required — include content only
+                        headers = {"Content-Type": "application/json"}
+                        logger.info('Posting push notification to %s', url)
+                        resp = await client.post(url, json=body, headers=headers)
+                        logger.info('Push notification posted: %s %s', resp.status_code, resp.text[:300])
+                except Exception as e:
+                    logger.exception('Failed to post push notification to %s: %s', url, e)
+
+            # Create push body that controllers commonly expect (mirrors the returned result)
+            push_body = {
+                "jsonrpc": "2.0",
+                "id": resp_id,
+                "result": response
+            }
+
+            # Fire-and-forget the push so we don't block the A2A response; log will capture failures
+            try:
+                asyncio.create_task(_post_push(push_url, push_body))
+            except Exception:
+                # Fallback: run it without awaiting (best-effort)
+                _ = _post_push(push_url, push_body)
+    except Exception:
+        logging.getLogger(__name__).exception('Error preparing push notification')
 
     # If the caller used JSON-RPC, reply with a JSON-RPC style response
     if is_jsonrpc:
