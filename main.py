@@ -280,15 +280,29 @@ async def a2a_motivation(request: Request):
                     # Determine headers for webhook POST
                     headers = {"Content-Type": "application/json"}
                     
-                    # Use a dedicated webhook token if available (recommended)
-                    # Otherwise fall back to agent API key
-                    webhook_token = os.getenv('TELEX_WEBHOOK_TOKEN')
+                    # Check for Telex auth credentials in the incoming config
+                    auth = pnc_config.get('authentication') or {}
+                    webhook_token = None
+                    
+                    # Telex format: auth.schemes = ["TelexApiKey"] and auth.credentials = token
+                    if auth.get('schemes') in [['TelexApiKey'], ['Bearer']]:
+                        webhook_token = auth.get('credentials')
+                        if webhook_token:
+                            logger.debug('Using credentials from pushNotificationConfig.authentication')
+                    
+                    # Fallback to environment variable
+                    if not webhook_token:
+                        webhook_token = os.getenv('TELEX_WEBHOOK_TOKEN')
+                        if webhook_token:
+                            logger.debug('Using TELEX_WEBHOOK_TOKEN from environment')
+                    
+                    # Last fallback to agent API key
                     if not webhook_token:
                         webhook_token = agent_api_key
+                        logger.debug('Using agent API key as fallback')
                     
                     if webhook_token:
                         headers['Authorization'] = f"Bearer {webhook_token}"
-                        logger.debug('Using webhook authentication token')
                     else:
                         logger.warning('No webhook authentication token available')
 
