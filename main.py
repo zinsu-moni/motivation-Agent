@@ -109,8 +109,32 @@ async def a2a_motivation(request: Request):
 
     # Accept multiple keys for backwards compatibility
     user_message = None
+    rpc_id = None
+    is_jsonrpc = False
     if isinstance(payload, dict):
-        user_message = payload.get("input") or payload.get("message") or payload.get("text")
+        # Handle JSON-RPC style payloads (e.g., telex/mastra)
+        if payload.get('jsonrpc') and isinstance(payload.get('params'), dict):
+            is_jsonrpc = True
+            rpc_id = payload.get('id')
+            try:
+                msg = payload['params'].get('message') or {}
+                # message.parts is a list of {kind: 'text', text: '...'}
+                parts = msg.get('parts') or []
+                texts = []
+                for p in parts:
+                    if isinstance(p, dict) and p.get('kind') == 'text' and p.get('text'):
+                        texts.append(p.get('text'))
+                    elif isinstance(p, str):
+                        texts.append(p)
+                if texts:
+                    user_message = ' '.join(texts).strip()
+                # fallback to message.messageId or other fields
+                if not user_message:
+                    user_message = msg.get('text') or msg.get('content')
+            except Exception:
+                user_message = None
+        else:
+            user_message = payload.get("input") or payload.get("message") or payload.get("text")
 
     if not user_message:
         # also allow query param fallback
@@ -145,6 +169,15 @@ async def a2a_motivation(request: Request):
             {"type": "message", "content": quote}
         ]
     }
+
+    # If the caller used JSON-RPC, reply with a JSON-RPC style response
+    if is_jsonrpc:
+        rpc_resp = {
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "result": response
+        }
+        return JSONResponse(status_code=200, content=rpc_resp)
 
     return JSONResponse(status_code=200, content=response)
 
