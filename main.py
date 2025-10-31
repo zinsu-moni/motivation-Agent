@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import os
 from services.OpenRouter import OpenRouterService
+import uuid
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -205,15 +206,28 @@ async def a2a_motivation(request: Request):
     service = OpenRouterService(api_key=api_key)
     try:
         quote = await service.generate_motivation(user_message=user_message)
+        # Post-process the model output to remove preamble and keep it concise for A2A callers
+        try:
+            cleaned = clean_motivation(quote)
+        except Exception:
+            cleaned = quote
+        logging.getLogger(__name__).info('Generated motivation (truncated): %s', (cleaned or '')[:200])
     except Exception as e:
         # Return structured error for A2A clients
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+    # Build a stable response id: prefer the incoming RPC id when present, otherwise generate one
+    resp_id = None
+    try:
+        resp_id = rpc_id or f"resp_{uuid.uuid4().hex}"
+    except Exception:
+        resp_id = f"resp_{uuid.uuid4().hex}"
+
     response = {
-        "id": "motivation_resp_1",
+        "id": resp_id,
         "status": "success",
         "outputs": [
-            {"type": "message", "content": quote}
+            {"type": "message", "content": cleaned}
         ]
     }
 
@@ -273,4 +287,23 @@ async def health():
         "workflow_active": wf_active,
         "workflow_id": wf_id
     })
+
+
+@app.get("/diag/openrouter")
+async def diag_openrouter():
+    """Diagnostic endpoint: make a quick test call from the host environment to validate provider auth.
+
+    Returns a short sample response or the exact error to help debug 401/permission problems.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "OPENAI_API_KEY not set in environment"})
+
+    svc = OpenRouterService(api_key=api_key)
+    try:
+        sample = await svc.generate_motivation(user_message="test authentication ping")
+        # return a short snippet so logs don't leak large content
+        return JSONResponse(status_code=200, content={"ok": True, "sample": (sample or '')[:500]})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
