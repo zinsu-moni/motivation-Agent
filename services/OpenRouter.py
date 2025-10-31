@@ -44,7 +44,10 @@ class OpenAIService:
             
             user_prompt = f"{user_context}User says: '{user_message}'\n\nProvide a motivational response that addresses their specific concern."
             
+            model = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')
+            logger.debug(f"Using model {model} for generate_motivation")
             response = await self.client.chat.completions.create(
+                model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -87,6 +90,7 @@ class OpenAIService:
             user_prompt = "Generate a daily motivational message to inspire someone to have a great day."
             
             response = await self.client.chat.completions.create(
+                model=os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo'),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -128,6 +132,7 @@ class OpenAIService:
             user_prompt = f"User's original request: '{original_request}'\nReminder text: '{reminder_text}'\n\nCreate a motivational reminder message."
             
             response = await self.client.chat.completions.create(
+                model=os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo'),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}

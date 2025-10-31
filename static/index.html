@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Motivo AI — Test UI</title>
+    <style>
+      body { font-family: system-ui, Arial; max-width: 760px; margin: 32px auto; padding: 0 16px; }
+      h1 { font-size: 1.4rem; }
+      textarea { width:100%; height:100px; padding:8px; font-size:14px }
+      input[type=text] { width:100%; padding:8px; font-size:14px }
+      button { padding:10px 14px; font-size:14px; margin-top:8px }
+      .card { border:1px solid #eee; padding:12px; border-radius:8px; margin-top:12px }
+      .log { white-space:pre-wrap; font-family:monospace; font-size:13px }
+    </style>
+  </head>
+  <body>
+    <h1>Motivo AI — Test UI</h1>
+    <p>Enter a message and (optionally) an API key. If you set <code>OPENAI_API_KEY</code> in the server environment you can leave the key empty.</p>
+
+    <label>Message</label>
+    <textarea id="message">I need a quick motivational boost to finish my project.</textarea>
+
+    <label style="display:block;margin-top:8px">API Key (optional)</label>
+    <input id="apikey" type="text" placeholder="sk-... or leave blank to use server env var" />
+
+    <div>
+      <button id="send">Send</button>
+      <button id="clear">Clear</button>
+    </div>
+
+    <div class="card">
+      <strong>Response</strong>
+      <div id="response" class="log">(no response yet)</div>
+    </div>
+
+    <script>
+      const send = document.getElementById('send');
+      const clear = document.getElementById('clear');
+      const responseEl = document.getElementById('response');
+
+      send.addEventListener('click', async () => {
+        responseEl.textContent = 'Waiting for response...';
+        const message = encodeURIComponent(document.getElementById('message').value || '');
+        const key = document.getElementById('apikey').value.trim();
+        const url = `/motivation?message=${message}`;
+
+        try {
+          const headers = {};
+          if (key) headers['X-API-KEY'] = key;
+
+          const res = await fetch(url, { headers });
+          if (!res.ok) {
+            const text = await res.text();
+            responseEl.textContent = `Error ${res.status}: ${text}`;
+            return;
+          }
+
+          const data = await res.json();
+          responseEl.textContent = JSON.stringify(data, null, 2);
+        } catch (err) {
+          responseEl.textContent = 'Network error: ' + err;
+        }
+      });
+
+      clear.addEventListener('click', () => {
+        responseEl.textContent = '(no response yet)';
+      });
+    </script>
+  </body>
+</html>
