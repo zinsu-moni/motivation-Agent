@@ -263,7 +263,7 @@ async def a2a_motivation(request: Request):
             push_url = pnc.get('url')
 
         if push_url:
-            async def _post_push(url: str, body: dict, pnc_config: dict, logger=logging.getLogger(__name__)):
+            async def _post_push(url: str, body: dict, pnc_config: dict, agent_api_key: str, logger=logging.getLogger(__name__)):
                 last = {
                     "ts": datetime.utcnow().isoformat() + 'Z',
                     "url": url,
@@ -275,8 +275,11 @@ async def a2a_motivation(request: Request):
                     # Determine headers for webhook POST
                     headers = {"Content-Type": "application/json"}
                     
-                    # The webhook URL itself acts as authentication (it's a secret URL)
-                    # We don't need to add Authorization headers unless explicitly configured
+                    # Use the agent's API key for webhook authentication
+                    # This allows Telex to verify the response came from the authorized agent
+                    if agent_api_key:
+                        headers['Authorization'] = f"Bearer {agent_api_key}"
+                        logger.debug('Using agent API key for webhook authentication')
 
                     logger.info('Posting push notification to %s', url)
                     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -311,7 +314,7 @@ async def a2a_motivation(request: Request):
 
             # Actually await the push (with timeout) so we can ensure delivery and record status
             try:
-                await asyncio.wait_for(_post_push(push_url, push_body, pnc), timeout=6.0)
+                await asyncio.wait_for(_post_push(push_url, push_body, pnc, api_key), timeout=6.0)
             except asyncio.TimeoutError:
                 logging.getLogger(__name__).warning('Push notification timed out after 6s')
             except Exception as e:
