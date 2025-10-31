@@ -1,0 +1,21 @@
+# Minimal dependencies inferred from project files
+# Assumptions:
+# - The app uses FastAPI for the web framework and is run with Uvicorn
+# - SQLAlchemy async APIs are used; the project uses SQLite via aiosqlite when DATABASE_URL is sqlite
+# - OpenAI Async client (new OpenAI SDK) is used via `openai.AsyncOpenAI`
+# - python-dotenv is used to load environment variables
+# - Pydantic is required for the request/response schemas
+
+fastapi>=0.95,<1.0
+uvicorn[standard]>=0.18,<1.0
+SQLAlchemy>=1.4,<3.0
+aiosqlite>=0.17
+python-dotenv>=1.0
+openai>=1.0
+pydantic>=1.10,<2
+
+# Optional / useful tools for local development (uncomment if needed)
+# httpx>=0.24  # async HTTP client (if you add external async requests)
+# pytest>=7.0  # tests
+
+# Install with: pip install -r requirements.txt
