@@ -52,6 +52,8 @@ async def handle_a2a_motivation(request: Request):
     try:
         # Parse request
         body = await request.json()
+        logger.info(f"[REQUEST] Raw body keys: {body.keys()}")
+        
         a2a_request = A2ARequest(**body)
         
         # Log incoming request
@@ -60,12 +62,20 @@ async def handle_a2a_motivation(request: Request):
             if part.kind == "text" and part.text:
                 user_message += part.text + " "
         
-        logger.info(f" Received A2A request (id={a2a_request.id})")
-        logger.info(f"   Message: {user_message[:100]}...")
+        logger.info(f"[REQUEST] Received A2A request (id={a2a_request.id})")
+        logger.info(f"[REQUEST] User message: {user_message[:100]}...")
+        logger.info(f"[REQUEST] Method: {a2a_request.method}")
         
         # Check if webhook is configured (async mode)
         webhook_config = a2a_request.params.configuration.pushNotificationConfig if a2a_request.params.configuration else None
         is_async = not a2a_request.params.configuration.blocking if a2a_request.params.configuration else False
+        
+        logger.info(f"[REQUEST] Webhook config present: {webhook_config is not None}")
+        logger.info(f"[REQUEST] Async mode: {is_async}")
+        
+        if webhook_config:
+            logger.info(f"[REQUEST] Webhook URL: {webhook_config.url}")
+            logger.info(f"[REQUEST] Webhook token present: {webhook_config.token is not None}")
         
         if is_async and webhook_config:
             logger.info(" Async mode: Will send response via webhook")
@@ -142,11 +152,14 @@ async def deliver_motivation_via_webhook(
     This runs in the background and doesn't block the HTTP response.
     """
     try:
-        logger.info(f" Background task: Generating motivation for request {request_id}")
+        logger.info(f"[WEBHOOK] Starting background task for request {request_id}")
+        logger.info(f"[WEBHOOK] Webhook URL: {webhook_url}")
+        logger.info(f"[WEBHOOK] Token present: {webhook_token is not None}")
         
         # Generate motivation
+        logger.info(f"[WEBHOOK] Generating motivation from message: {user_message[:50]}...")
         motivation = await motivation_service.generate_motivation(user_message)
-        logger.info(f" Generated: {motivation[:80]}...")
+        logger.info(f"[WEBHOOK] Generated motivation: {motivation}")
         
         # Build A2A response
         result = {
@@ -155,7 +168,8 @@ async def deliver_motivation_via_webhook(
                 "role": "assistant",
                 "parts": [
                     {"kind": "text", "text": motivation}
-                ]
+                ],
+                "messageId": f"response-{request_id}"
             }
         }
         
@@ -165,29 +179,42 @@ async def deliver_motivation_via_webhook(
             "result": result
         }
         
+        logger.info(f"[WEBHOOK] Request body: {webhook_body}")
+        
         # Send webhook with authentication
         headers = {"Content-Type": "application/json"}
         if webhook_token:
             headers["Authorization"] = f"Bearer {webhook_token}"
-            logger.debug(" Using webhook token for authentication")
+            logger.info(f"[WEBHOOK] Using Bearer token for authentication")
+        else:
+            logger.warning(f"[WEBHOOK] No token provided for webhook!")
         
-        logger.info(f" Posting to webhook: {webhook_url}")
+        logger.info(f"[WEBHOOK] Sending POST to: {webhook_url}")
+        logger.info(f"[WEBHOOK] Headers: {list(headers.keys())}")
         
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(webhook_url, json=webhook_body, headers=headers)
-            
-            if resp.status_code == 200:
-                logger.info(f" Webhook delivered successfully (status={resp.status_code})")
-            else:
-                logger.warning(
-                    f" Webhook failed: status={resp.status_code}, "
-                    f"response={resp.text[:100]}"
-                )
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.post(webhook_url, json=webhook_body, headers=headers)
+                
+                logger.info(f"[WEBHOOK] Response status: {resp.status_code}")
+                logger.info(f"[WEBHOOK] Response headers: {dict(resp.headers)}")
+                logger.info(f"[WEBHOOK] Response body: {resp.text[:500]}")
+                
+                if resp.status_code == 200:
+                    logger.info(f"[WEBHOOK] SUCCESS - Response delivered!")
+                else:
+                    logger.warning(
+                        f"[WEBHOOK] FAILED - Status {resp.status_code}: {resp.text[:200]}"
+                    )
+            except httpx.TimeoutException as te:
+                logger.error(f"[WEBHOOK] TIMEOUT after 10s: {te}")
+            except Exception as post_error:
+                logger.error(f"[WEBHOOK] POST ERROR: {post_error}", exc_info=True)
     
     except asyncio.TimeoutError:
-        logger.error(" Webhook request timed out after 5 seconds")
+        logger.error("[WEBHOOK] Background task timed out")
     except Exception as e:
-        logger.error(f" Webhook delivery error: {e}", exc_info=True)
+        logger.error(f"[WEBHOOK] ERROR: {e}", exc_info=True)
 
 
 @app.get("/workflow")
