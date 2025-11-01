@@ -13,9 +13,9 @@ aiosqlite>=0.17
 python-dotenv>=1.0
 openai>=1.0
 pydantic>=1.10,<2
+httpx>=0.24
 
 # Optional / useful tools for local development (uncomment if needed)
-# httpx>=0.24  # async HTTP client (if you add external async requests)
 # pytest>=7.0  # tests
 
 # Install with: pip install -r requirements.txt

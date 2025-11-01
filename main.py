@@ -1,451 +1,223 @@
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
+"""
+Motivation Agent - A2A Protocol Implementation
+Built with FastAPI and OpenRouter AI
+"""
 import os
-from services.OpenRouter import OpenRouterService
-import uuid
 import asyncio
-import httpx
-from datetime import datetime
-
-from fastapi import HTTPException
-from fastapi.responses import JSONResponse
-import json
-from pathlib import Path
 import logging
-import time
+from typing import Optional
 
-app = FastAPI()
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
 
-# Allow CORS for development/testing so agent pages served from other origins can receive replies
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+from models import (
+    A2ARequest,
+    A2AResponse,
+    A2AResponseResult,
+    A2AResponseMessage,
+    A2AResponsePart,
 )
+from services import MotivationService
 
-# Global store for last push notification attempt (for diagnostics)
-_LAST_PUSH = {}
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_dotenv()
+
+# Initialize FastAPI app
+app = FastAPI(title="Motivation Agent", version="1.0.0")
+
+# Initialize service
+motivation_service = MotivationService(api_key=os.getenv("OPENAI_API_KEY"))
 
 
-def clean_motivation(text: str) -> str:
-    """Heuristic cleaner: remove common preamble phrases and return up to 3 sentences.
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok", "service": "motivation-agent"}
 
-    This helps remove model lead-ins like "You're seeking..." so callers get the actual motivational text.
+
+@app.post("/a2a/motivation")
+async def handle_a2a_motivation(request: Request):
     """
-    if not text:
-        return text
-
-    import re
-
-    # Normalize whitespace
-    t = re.sub(r"\s+", " ", text).strip()
-
-    # Remove common preamble patterns
-    preamble_patterns = [
-        r"^it\s?sounds like\b.*?[.?!]\s*",
-        r"^you('?re| are)\s+seeking\b.*?[.?!]\s*",
-        r"^it\s+looks\s+like\b.*?[.?!]\s*",
-        r"^you\s+want\b.*?[.?!]\s*",
-        r"^you\s+are\s+looking\s+for\b.*?[.?!]\s*",
-        r"^i\s+understand\b.*?[.?!]\s*",
-    ]
-    for pat in preamble_patterns:
-        t = re.sub(pat, "", t, flags=re.IGNORECASE)
-
-    # Split into sentences (very simple heuristic)
-    sentences = re.split(r'(?<=[.!?])\s+', t)
-    # Keep up to first 3 non-empty sentences
-    kept = []
-    for s in sentences:
-        s = s.strip()
-        if s:
-            kept.append(s)
-        if len(kept) >= 3:
-            break
-
-    return " ".join(kept) if kept else t
-
-async def send_webhook_notification(url: str, payload: dict, rpc_id: str, webhook_token: str = None) -> bool:
-    """Send webhook notification to Telex callback URL (non-blocking).
+    Main A2A endpoint for handling motivation requests.
     
-    The response should follow A2A format with message parts.
+    Expects JSON-RPC 2.0 format with Telex A2A protocol.
+    Returns immediately with 200 OK, then sends response via webhook.
     """
     try:
-        logger = logging.getLogger(__name__)
-        logger.info('Background: Sending webhook to %s', url)
+        # Parse request
+        body = await request.json()
+        a2a_request = A2ARequest(**body)
         
-        headers = {"Content-Type": "application/json"}
+        # Log incoming request
+        user_message = ""
+        for part in a2a_request.params.message.parts:
+            if part.kind == "text" and part.text:
+                user_message += part.text + " "
         
-        # If we have a webhook token from Telex, use it in Authorization header
-        if webhook_token:
-            headers['Authorization'] = f"Bearer {webhook_token}"
-            logger.info('Using Telex webhook token for authentication')
+        logger.info(f" Received A2A request (id={a2a_request.id})")
+        logger.info(f"   Message: {user_message[:100]}...")
+        
+        # Check if webhook is configured (async mode)
+        webhook_config = a2a_request.params.configuration.pushNotificationConfig if a2a_request.params.configuration else None
+        is_async = not a2a_request.params.configuration.blocking if a2a_request.params.configuration else False
+        
+        if is_async and webhook_config:
+            logger.info(" Async mode: Will send response via webhook")
+            
+            # Return immediately
+            immediate_response = {
+                "jsonrpc": "2.0",
+                "id": a2a_request.id,
+                "result": {
+                    "message": {
+                        "kind": "message",
+                        "role": "assistant",
+                        "parts": [
+                            {"kind": "text", "text": "Processing your request..."}
+                        ]
+                    }
+                }
+            }
+            
+            # Schedule background webhook delivery
+            asyncio.create_task(
+                deliver_motivation_via_webhook(
+                    user_message.strip(),
+                    a2a_request.id,
+                    webhook_config.url,
+                    webhook_config.token,
+                )
+            )
+            
+            return JSONResponse(status_code=200, content=immediate_response)
+        
         else:
-            logger.warning('⚠️ No webhook token found!')
+            logger.info(" Blocking mode: Will send response directly")
+            
+            # Generate motivation synchronously
+            motivation = await motivation_service.generate_motivation(user_message.strip())
+            
+            # Build A2A response
+            response = A2AResponse(
+                id=a2a_request.id,
+                result=A2AResponseResult(
+                    message=A2AResponseMessage(
+                        parts=[A2AResponsePart(kind="text", text=motivation)]
+                    )
+                )
+            )
+            
+            logger.info(f" Generated response (id={a2a_request.id})")
+            return JSONResponse(status_code=200, content=response.model_dump())
+    
+    except Exception as e:
+        logger.error(f" Error handling A2A request: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32603,
+                    "message": f"Internal error: {str(e)}"
+                }
+            }
+        )
+
+
+async def deliver_motivation_via_webhook(
+    user_message: str,
+    request_id: str,
+    webhook_url: str,
+    webhook_token: Optional[str] = None,
+):
+    """
+    Generate motivation and deliver via webhook callback.
+    
+    This runs in the background and doesn't block the HTTP response.
+    """
+    try:
+        logger.info(f" Background task: Generating motivation for request {request_id}")
         
-        # Format the response as A2A message.parts for Telex
-        # This is what Telex expects to display on the UI
-        result_data = {
+        # Generate motivation
+        motivation = await motivation_service.generate_motivation(user_message)
+        logger.info(f" Generated: {motivation[:80]}...")
+        
+        # Build A2A response
+        result = {
             "message": {
                 "kind": "message",
                 "role": "assistant",
                 "parts": [
-                    {
-                        "kind": "text",
-                        "text": payload.get("outputs", [{}])[0].get("content", "No motivation generated")
-                    }
+                    {"kind": "text", "text": motivation}
                 ]
             }
         }
         
         webhook_body = {
             "jsonrpc": "2.0",
-            "id": rpc_id,
-            "result": result_data
+            "id": request_id,
+            "result": result
         }
         
-        logger.debug('Webhook body: %s', str(webhook_body)[:500])
+        # Send webhook with authentication
+        headers = {"Content-Type": "application/json"}
+        if webhook_token:
+            headers["Authorization"] = f"Bearer {webhook_token}"
+            logger.debug(" Using webhook token for authentication")
+        
+        logger.info(f" Posting to webhook: {webhook_url}")
         
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(url, json=webhook_body, headers=headers)
-            logger.info('Webhook response status: %s', resp.status_code)
-            logger.info('Webhook response body: %s', (resp.text or '')[:200])
+            resp = await client.post(webhook_url, json=webhook_body, headers=headers)
             
             if resp.status_code == 200:
-                logger.info('✅ Webhook delivered successfully! Status: %s', resp.status_code)
-                return True
+                logger.info(f" Webhook delivered successfully (status={resp.status_code})")
             else:
-                logger.warning('⚠️ Webhook failed with status %s: %s', resp.status_code, (resp.text or '')[:100])
-                return False
+                logger.warning(
+                    f" Webhook failed: status={resp.status_code}, "
+                    f"response={resp.text[:100]}"
+                )
+    
     except asyncio.TimeoutError:
-        logging.getLogger(__name__).error('Webhook timeout after 5s')
-        return False
+        logger.error(" Webhook request timed out after 5 seconds")
     except Exception as e:
-        logging.getLogger(__name__).exception('Webhook error: %s', e)
-        return False
-
-# Mount the static folder so you can open /static/index.html in the browser for testing
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-@app.get("/")
-async def read_root(request: Request):
-    # Keep the JSON root for API users, but provide a link to the simple UI
-    return {"message": "Welcome to the FastAPI application!", "ui": "/static/index.html"}
-
-@app.get("/a2a/motivation")
-@app.get("/motivation")
-async def get_motivation(request: Request):
-    api_key = request.headers.get("X-API-KEY")
-    # If no per-request API key provided, fall back to environment variable (useful for deployments)
-    if not api_key:
-        api_key = os.getenv("OPENAI_API_KEY")
-
-    if not api_key:
-        return Response(content="API key missing", status_code=401)
-
-    # Accept a user message via query parameter ?message=... (or ?q=...); use a safe default if absent
-    user_message = request.query_params.get("message") or request.query_params.get("q")
-    if not user_message:
-        user_message = "i need motivation on programming to keep me going"
-
-    openrouter_service = OpenRouterService(api_key=api_key)
-    try:
-        logging.getLogger(__name__).info('Calling generate_motivation for message (truncated): %s', (user_message or '')[:200])
-        quote = await openrouter_service.generate_motivation(user_message=user_message)
-        # Clean model preamble and limit to concise reply
-        try:
-            quote = clean_motivation(quote)
-        except Exception:
-            pass
-        logging.getLogger(__name__).info('Received quote (truncated): %s', (quote or '')[:200])
-    except Exception as e:
-        # Log and return a 500-friendly message (service has its own fallbacks too)
-        logging.getLogger(__name__).exception('generate_motivation failed: %s', e)
-        return Response(content=f"Error generating motivation: {e}", status_code=500)
-
-    return {"motivation": quote}
+        logger.error(f" Webhook delivery error: {e}", exc_info=True)
 
 
-@app.post("/a2a/motivation")
-async def a2a_motivation(request: Request):
-    """A2A-style POST endpoint.
-
-    Expected JSON body (flexible):
-    {
-      "input": "...",
-      "message": "...",
-      "meta": { ... }
-    }
-
-    Returns A2A-like JSON with outputs array.
-    """
-    # Robust parsing: accept JSON, form-encoded, or raw text bodies.
-    logger = logging.getLogger(__name__)
-    
-    # Log all incoming headers to find any auth token Telex might have sent
-    logger.info('Incoming request headers: %s', dict(request.headers))
-    
-    # Extract the Bearer token that Telex sent us - we'll use it for webhook callback
-    telex_bearer_token = request.headers.get('x-vercel-proxy-signature')
-    if telex_bearer_token and telex_bearer_token.startswith('Bearer '):
-        telex_bearer_token = telex_bearer_token[7:]  # Remove "Bearer " prefix
-        logger.info('Found Telex Bearer token in x-vercel-proxy-signature header')
-    else:
-        telex_bearer_token = None
-    
-    payload = None
-    raw_body = None
-    content_type = (request.headers.get('content-type') or '').lower()
-    try:
-        if 'application/json' in content_type:
-            payload = await request.json()
-        elif 'application/x-www-form-urlencoded' in content_type or 'multipart/form-data' in content_type:
-            form = await request.form()
-            # form is a starlette.datastructures.FormData; convert to dict
-            payload = {k: v for k, v in form.items()}
-        else:
-            # try JSON first, then fall back to raw text
-            try:
-                payload = await request.json()
-            except Exception:
-                raw_bytes = await request.body()
-                raw_body = raw_bytes.decode('utf-8', errors='replace')
-                # try to parse raw text as JSON
-                try:
-                    payload = json.loads(raw_body)
-                except Exception:
-                    # treat raw body as message text
-                    payload = {"input": raw_body}
-    except Exception:
-        # Log raw body snippet for debugging (masked)
-        try:
-            raw = (await request.body()).decode('utf-8', errors='replace')
-            snippet = raw[:1000]
-            logger.info('Received invalid A2A body (could not parse): %s', snippet)
-        except Exception:
-            logger.debug('Failed to read raw body for logging')
-        raise HTTPException(status_code=400, detail="Invalid request payload")
-
-    # Sanitize payload for logging (mask api keys)
-    try:
-        sanitized = dict(payload) if isinstance(payload, dict) else payload
-        if isinstance(sanitized, dict):
-            # Log the full params.configuration to see if there's a token we're missing
-            if 'params' in sanitized and isinstance(sanitized['params'], dict):
-                config = sanitized['params'].get('configuration', {})
-                logger.debug('Full configuration received: %s', config)
-                
-                # Also log the pushNotificationConfig authentication details
-                pnc = config.get('pushNotificationConfig', {})
-                auth = pnc.get('authentication', {})
-                if auth:
-                    logger.info('Webhook authentication object: %s', auth)
-                    logger.info('All auth fields: %s', list(auth.keys()) if isinstance(auth, dict) else type(auth))
-                
-                # Check for any token-like fields in params
-                params_keys = list(sanitized['params'].keys())
-                logger.info('Params keys: %s', params_keys)
-                
-                # Check for any token-like fields
-                for key in params_keys:
-                    val = sanitized['params'][key]
-                    if isinstance(val, (str, dict)) and len(str(val)) < 500:
-                        if 'token' in key.lower() or 'auth' in key.lower() or 'secret' in key.lower():
-                            logger.info('Found potential auth field %s: %s', key, val)
-            
-            meta = sanitized.get('meta')
-            if isinstance(meta, dict) and 'api_key' in meta:
-                meta['api_key'] = '***masked***'
-            if 'api_key' in sanitized:
-                sanitized['api_key'] = '***masked***'
-        logger.info('Received A2A payload: %s', sanitized)
-    except Exception:
-        logger.debug('Failed to sanitize A2A payload for logging')
-
-    # Accept multiple keys for backwards compatibility
-    user_message = None
-    rpc_id = None
-    is_jsonrpc = False
-    if isinstance(payload, dict):
-        # Handle JSON-RPC style payloads (e.g., telex/mastra)
-        if payload.get('jsonrpc') and isinstance(payload.get('params'), dict):
-            is_jsonrpc = True
-            rpc_id = payload.get('id')
-            try:
-                msg = payload['params'].get('message') or {}
-                # message.parts is a list of {kind: 'text', text: '...'}
-                parts = msg.get('parts') or []
-                texts = []
-                for p in parts:
-                    if isinstance(p, dict) and p.get('kind') == 'text' and p.get('text'):
-                        texts.append(p.get('text'))
-                    elif isinstance(p, str):
-                        texts.append(p)
-                if texts:
-                    user_message = ' '.join(texts).strip()
-                # fallback to message.messageId or other fields
-                if not user_message:
-                    user_message = msg.get('text') or msg.get('content')
-            except Exception:
-                user_message = None
-        else:
-            user_message = payload.get("input") or payload.get("message") or payload.get("text")
-
-    if not user_message:
-        # also allow query param fallback
-        user_message = request.query_params.get("message") or request.query_params.get("q")
-
-    if not user_message:
-        raise HTTPException(status_code=400, detail="No message provided in A2A payload")
-
-    # API key can be in header or in payload.meta.api_key
-    api_key = request.headers.get("X-API-KEY")
-    if not api_key and isinstance(payload, dict):
-        meta = payload.get("meta") or {}
-        api_key = meta.get("api_key") or payload.get("api_key")
-
-    if not api_key:
-        api_key = os.getenv("OPENAI_API_KEY")
-
-    if not api_key:
-        raise HTTPException(status_code=401, detail="API key missing")
-
-    service = OpenRouterService(api_key=api_key)
-    try:
-        quote = await service.generate_motivation(user_message=user_message)
-        # Post-process the model output to remove preamble and keep it concise for A2A callers
-        try:
-            cleaned = clean_motivation(quote)
-        except Exception:
-            cleaned = quote
-        logging.getLogger(__name__).info('Generated motivation (truncated): %s', (cleaned or '')[:200])
-    except Exception as e:
-        # Return structured error for A2A clients
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-    # Build a stable response id: prefer the incoming RPC id when present, otherwise generate one
-    resp_id = None
-    try:
-        resp_id = rpc_id or f"resp_{uuid.uuid4().hex}"
-    except Exception:
-        resp_id = f"resp_{uuid.uuid4().hex}"
-
-    response = {
-        "id": resp_id,
-        "status": "success",
-        "outputs": [
+@app.get("/workflow")
+async def get_workflow():
+    """Return workflow metadata for Telex integration."""
+    return {
+        "active": True,
+        "id": "motivation_agent_01",
+        "name": "motivation_agent",
+        "category": "motivation",
+        "description": "A compassionate and energetic motivational coach that provides encouragement without asking clarifying questions",
+        "nodes": [
             {
-                "type": "text",
-                "content": cleaned
+                "id": "motivation_handler",
+                "type": "a2a/http-endpoint",
+                "url": "/a2a/motivation",
+                "authentication": {
+                    "header": "X-API-KEY",
+                    "default_env": "OPENAI_API_KEY"
+                },
+                "parameters": {
+                    "auto_respond": True,
+                    "respond_immediately": True,
+                    "clarify_if_missing": False
+                }
             }
         ]
     }
 
-    # For non-blocking mode: send response to webhook URL (fire and forget)
-    if not is_jsonrpc:
-        return JSONResponse(status_code=200, content=response)
-    
-    # For JSON-RPC mode, immediately return 200 OK to Telex
-    # Then handle webhook push asynchronously (fire and forget)
-    if is_jsonrpc:
-        rpc_resp = {
-            "jsonrpc": "2.0",
-            "id": rpc_id,
-            "result": response
-        }
-        logging.getLogger(__name__).info('Returning JSON-RPC response id=%s', rpc_id)
-        
-        # Extract webhook URL and token from configuration
-        push_url = None
-        webhook_token = None
-        if isinstance(payload, dict):
-            params = payload.get('params') or {}
-            config = params.get('configuration') or {}
-            pnc = config.get('pushNotificationConfig') or {}
-            push_url = pnc.get('url')
-            webhook_token = pnc.get('token')  # Extract the JWT token Telex provides
-            if webhook_token:
-                logging.getLogger(__name__).info('Found webhook token in pushNotificationConfig')
-        
-        if push_url:
-            # Schedule webhook notification as background task with token
-            asyncio.create_task(send_webhook_notification(push_url, response, rpc_id, webhook_token))
-        
-        return JSONResponse(status_code=200, content=rpc_resp)
-@app.get("/workflow")
-async def get_workflow():
-    """Return the workflow JSON so you can confirm the deployed workflow."""
-    p = Path("workflow/workflow.json")
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="workflow.json not found")
-    try:
-        data = json.loads(p.read_text(encoding='utf-8'))
-        return JSONResponse(status_code=200, content=data)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read workflow.json: {e}")
 
-
-@app.get("/health")
-async def health():
-    """Simple health endpoint reporting key presence, service init and workflow active flag."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    key_present = bool(api_key)
-    wf_path = Path("workflow/workflow.json")
-    wf_active = False
-    wf_id = None
-    if wf_path.exists():
-        try:
-            wf = json.loads(wf_path.read_text(encoding='utf-8'))
-            wf_active = bool(wf.get('active'))
-            wf_id = wf.get('id')
-        except Exception:
-            wf_active = False
-
-    # Try to initialize the service (won't call external API) to detect gross misconfigurations
-    service_init_ok = False
-    try:
-        _ = OpenRouterService(api_key=api_key)
-        service_init_ok = True
-    except Exception as e:
-        logging.getLogger(__name__).warning('Service init failed: %s', e)
-
-    return JSONResponse(status_code=200, content={
-        "ok": True,
-        "api_key_present": key_present,
-        "service_init_ok": service_init_ok,
-        "workflow_active": wf_active,
-        "workflow_id": wf_id
-    })
-
-
-@app.get("/diag/openrouter")
-async def diag_openrouter():
-    """Diagnostic endpoint: make a quick test call from the host environment to validate provider auth.
-
-    Returns a short sample response or the exact error to help debug 401/permission problems.
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return JSONResponse(status_code=400, content={"ok": False, "error": "OPENAI_API_KEY not set in environment"})
-
-    svc = OpenRouterService(api_key=api_key)
-    try:
-        sample = await svc.generate_motivation(user_message="test authentication ping")
-        # return a short snippet so logs don't leak large content
-        return JSONResponse(status_code=200, content={"ok": True, "sample": (sample or '')[:500]})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
-
-
-@app.get("/diag/lastpush")
-async def diag_lastpush():
-    """Return the last push notification attempt recorded by the server (for debugging webhooks)."""
-    try:
-        return JSONResponse(status_code=200, content={"ok": True, "last_push": _LAST_PUSH.get('last') if isinstance(_LAST_PUSH, dict) else None})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
-
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
