@@ -282,6 +282,7 @@ async def a2a_motivation(request: Request):
                     headers = {"Content-Type": "application/json"}
                     
                     # Check if authentication object has credentials or token
+                    token_found = False
                     if isinstance(auth_obj, dict):
                         credentials = auth_obj.get('credentials')
                         schemes = auth_obj.get('schemes', [])
@@ -290,14 +291,28 @@ async def a2a_motivation(request: Request):
                             logging.getLogger(__name__).debug('Found credentials in auth object: %s', type(credentials))
                             if isinstance(credentials, str):
                                 headers['Authorization'] = credentials
+                                token_found = True
                             elif isinstance(credentials, dict):
                                 token = credentials.get('token') or credentials.get('bearer')
                                 if token:
                                     headers['Authorization'] = f"Bearer {token}"
+                                    token_found = True
                         elif 'Bearer' in schemes:
-                            logging.getLogger(__name__).debug('Bearer auth expected but no credentials found in auth object')
+                            logging.getLogger(__name__).debug('Bearer auth expected but no credentials in auth object')
                     
-                    logging.getLogger(__name__).info('Sending webhook response to %s', url)
+                    # If no credentials provided, try extracting UUID from webhook URL as the token
+                    # Format: https://ping.telex.im/v1/a2a/webhooks/{uuid}
+                    if not token_found and 'webhooks/' in url:
+                        try:
+                            uuid_token = url.split('webhooks/')[-1].strip('/')
+                            if uuid_token and len(uuid_token) > 10:  # reasonable UUID length
+                                headers['Authorization'] = f"Bearer {uuid_token}"
+                                logging.getLogger(__name__).debug('Using webhook URL UUID as Bearer token: %s...', uuid_token[:12])
+                                token_found = True
+                        except Exception as e:
+                            logging.getLogger(__name__).debug('Failed to extract UUID from webhook URL: %s', e)
+                    
+                    logging.getLogger(__name__).info('Sending webhook response to %s (auth: %s)', url, 'Bearer' if token_found else 'none')
                     async with httpx.AsyncClient(timeout=5.0) as client:
                         resp = await client.post(url, json=body, headers=headers)
                         logging.getLogger(__name__).info('Webhook response: %s %s', resp.status_code, (resp.text or '')[:200])
