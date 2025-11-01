@@ -158,8 +158,13 @@ async def deliver_motivation_via_webhook(
         
         # Generate motivation
         logger.info(f"[WEBHOOK] Generating motivation from message: {user_message[:50]}...")
-        motivation = await motivation_service.generate_motivation(user_message)
-        logger.info(f"[WEBHOOK] Generated motivation: {motivation}")
+        try:
+            motivation = await motivation_service.generate_motivation(user_message)
+            logger.info(f"[WEBHOOK] Generated motivation: {motivation}")
+        except Exception as gen_error:
+            logger.error(f"[WEBHOOK] ERROR generating motivation: {type(gen_error).__name__}: {gen_error}", exc_info=True)
+            motivation = "You've got this! Keep pushing forward and believe in yourself."
+            logger.info(f"[WEBHOOK] Using fallback motivation")
         
         # Build A2A response
         result = {
@@ -179,7 +184,7 @@ async def deliver_motivation_via_webhook(
             "result": result
         }
         
-        logger.info(f"[WEBHOOK] Request body: {webhook_body}")
+        logger.info(f"[WEBHOOK] Built request body: {str(webhook_body)[:200]}...")
         
         # Send webhook with authentication
         headers = {"Content-Type": "application/json"}
@@ -194,6 +199,7 @@ async def deliver_motivation_via_webhook(
         
         async with httpx.AsyncClient(timeout=10.0) as client:
             try:
+                logger.info(f"[WEBHOOK] Making HTTP POST request...")
                 resp = await client.post(webhook_url, json=webhook_body, headers=headers)
                 
                 logger.info(f"[WEBHOOK] Response status: {resp.status_code}")
@@ -201,7 +207,7 @@ async def deliver_motivation_via_webhook(
                 logger.info(f"[WEBHOOK] Response body: {resp.text[:500]}")
                 
                 if resp.status_code == 200:
-                    logger.info(f"[WEBHOOK] SUCCESS - Response delivered!")
+                    logger.info(f"[WEBHOOK] SUCCESS - Response delivered to Telex!")
                 else:
                     logger.warning(
                         f"[WEBHOOK] FAILED - Status {resp.status_code}: {resp.text[:200]}"
@@ -209,12 +215,12 @@ async def deliver_motivation_via_webhook(
             except httpx.TimeoutException as te:
                 logger.error(f"[WEBHOOK] TIMEOUT after 10s: {te}")
             except Exception as post_error:
-                logger.error(f"[WEBHOOK] POST ERROR: {post_error}", exc_info=True)
+                logger.error(f"[WEBHOOK] POST ERROR: {type(post_error).__name__}: {post_error}", exc_info=True)
     
     except asyncio.TimeoutError:
         logger.error("[WEBHOOK] Background task timed out")
     except Exception as e:
-        logger.error(f"[WEBHOOK] ERROR: {e}", exc_info=True)
+        logger.error(f"[WEBHOOK] TOP-LEVEL ERROR: {type(e).__name__}: {e}", exc_info=True)
 
 
 @app.get("/workflow")

@@ -48,7 +48,9 @@ class MotivationService:
             Motivational response (cleaned of preambles, 1-3 sentences)
         """
         try:
-            logger.info(f"🤖 Calling OpenRouter for motivation...")
+            logger.info(f"[SERVICE] Calling OpenRouter for motivation...")
+            logger.info(f"[SERVICE] Model: {self.model}")
+            logger.info(f"[SERVICE] User input: {user_input[:50]}...")
             
             # Create system prompt for a compassionate motivational coach
             system_prompt = (
@@ -59,6 +61,7 @@ class MotivationService:
             )
             
             # Call OpenRouter via OpenAI client
+            logger.info(f"[SERVICE] Making API call...")
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -68,21 +71,27 @@ class MotivationService:
                 temperature=0.7,
                 max_tokens=150,
             )
+            logger.info(f"[SERVICE] API call completed")
             
             # Extract response
+            logger.info(f"[SERVICE] Response type: {type(response)}")
+            logger.info(f"[SERVICE] Choices count: {len(response.choices)}")
+            
             motivation = response.choices[0].message.content.strip()
-            logger.info(f"📝 Raw response: {motivation[:100]}...")
+            logger.info(f"[SERVICE] Raw response: {motivation[:100]}...")
             
             # Clean the response
             cleaned = self._clean_motivation(motivation)
-            logger.info(f"✨ Cleaned response: {cleaned}")
+            logger.info(f"[SERVICE] Cleaned response: {cleaned}")
             
             return cleaned
         
         except Exception as e:
-            logger.error(f"❌ Error generating motivation: {e}", exc_info=True)
+            logger.error(f"[SERVICE] ERROR generating motivation: {type(e).__name__}: {e}", exc_info=True)
             # Return a default motivational message if API fails
-            return "You've got this! Keep pushing forward and believe in yourself. 💪"
+            default = "You've got this! Keep pushing forward and believe in yourself."
+            logger.info(f"[SERVICE] Returning default: {default}")
+            return default
     
     def _clean_motivation(self, text: str) -> str:
         """
