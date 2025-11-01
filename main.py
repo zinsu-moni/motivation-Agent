@@ -6,10 +6,11 @@ import os
 import asyncio
 import logging
 from typing import Optional
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from dotenv import load_dotenv
 
 from models import (
@@ -33,6 +34,15 @@ app = FastAPI(title="Motivation Agent", version="1.0.0")
 
 # Initialize service
 motivation_service = MotivationService(api_key=os.getenv("OPENAI_API_KEY"))
+
+@app.get("/")
+@app.get("/index.html")
+async def serve_frontend():
+    """Serve the frontend HTML file."""
+    static_file = Path(__file__).parent / "static" / "index.html"
+    if static_file.exists():
+        return FileResponse(static_file, media_type="text/html")
+    return {"error": "Frontend not found"}
 
 
 @app.get("/health")
@@ -249,6 +259,9 @@ async def get_workflow():
             }
         ]
     }
+
+
+
 
 
 if __name__ == "__main__":

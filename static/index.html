@@ -15,19 +15,15 @@
     </style>
   </head>
   <body>
-    <h1>Motivo AI — Test UI</h1>
-    <p>Enter a message and (optionally) an API key. If you set <code>OPENAI_API_KEY</code> in the server environment you can leave the key empty.</p>
+    <h1>🤖 Motivo AI — Test UI</h1>
+    <p>Test the A2A motivation API endpoint. Enter your message and click Send to test the endpoint (A2A mode is enabled by default).</p>
 
-    <label>Message</label>
+    <label>📝 Your Message</label>
     <textarea id="message">I need a quick motivational boost to finish my project.</textarea>
 
-    <label style="display:block;margin-top:8px">API Key (optional)</label>
-    <input id="apikey" type="text" placeholder="sk-... or leave blank to use server env var" />
-
-    <div>
-      <label style="margin-right:8px"><input type="checkbox" id="useA2A" /> Use A2A POST</label>
-      <button id="send">Send</button>
-      <button id="clear">Clear</button>
+    <div style="margin-top:12px">
+      <button id="send" style="background-color:#4CAF50; color:white; font-weight:bold">📤 Send Request</button>
+      <button id="clear" style="background-color:#f44336; color:white">🗑️ Clear Response</button>
     </div>
 
     <div class="card">
@@ -50,10 +46,21 @@
         try {
           if (useA2A) {
             const url = '/a2a/motivation';
-            const body = { input: rawMessage };
-            // Optionally include api_key in meta if provided
-            if (key) body.meta = { api_key: key };
+            
+            // Build proper A2A JSON-RPC 2.0 request
+            const body = {
+              jsonrpc: "2.0",
+              id: "test-" + Math.random().toString(36).substr(2, 9),
+              method: "message/send",
+              params: {
+                message: {
+                  role: "user",
+                  content: rawMessage
+                }
+              }
+            };
 
+            console.log('Sending A2A request:', body);
             const res = await fetch(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },

@@ -84,7 +84,12 @@ class MotivationService:
                 logger.error(f"[SERVICE] API call timed out after 25 seconds")
                 raise
             except Exception as api_error:
-                logger.error(f"[SERVICE] API call failed: {type(api_error).__name__}: {api_error}")
+                # Check for authentication errors
+                if "401" in str(api_error) or "User not found" in str(api_error) or "AuthenticationError" in type(api_error).__name__:
+                    logger.error(f"[SERVICE] AUTHENTICATION ERROR - API key invalid: {api_error}")
+                    logger.error(f"[SERVICE] Please update OPENAI_API_KEY in .env file")
+                else:
+                    logger.error(f"[SERVICE] API call failed: {type(api_error).__name__}: {api_error}")
                 raise
             
             # Extract response
