@@ -275,7 +275,7 @@ async def a2a_motivation(request: Request):
                     logging.getLogger(__name__).info('Sending webhook response to %s', url)
                     async with httpx.AsyncClient(timeout=5.0) as client:
                         resp = await client.post(url, json=body, headers=headers)
-                        logging.getLogger(__name__).info('Webhook response: %s', resp.status_code)
+                        logging.getLogger(__name__).info('Webhook response: %s %s', resp.status_code, (resp.text or '')[:200])
                 except Exception as e:
                     logging.getLogger(__name__).exception('Webhook error: %s', e)
             
