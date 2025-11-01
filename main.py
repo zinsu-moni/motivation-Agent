@@ -273,12 +273,6 @@ async def a2a_motivation(request: Request):
                 try:
                     headers = {"Content-Type": "application/json"}
                     
-                    # Try to get webhook auth token from environment
-                    webhook_token = os.getenv('TELEX_WEBHOOK_TOKEN')
-                    if webhook_token:
-                        headers['Authorization'] = f"Bearer {webhook_token}"
-                        logging.getLogger(__name__).debug('Using TELEX_WEBHOOK_TOKEN for webhook auth')
-                    
                     logging.getLogger(__name__).info('Sending webhook response to %s', url)
                     async with httpx.AsyncClient(timeout=5.0) as client:
                         resp = await client.post(url, json=body, headers=headers)
