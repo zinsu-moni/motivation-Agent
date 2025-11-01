@@ -125,6 +125,10 @@ async def a2a_motivation(request: Request):
     """
     # Robust parsing: accept JSON, form-encoded, or raw text bodies.
     logger = logging.getLogger(__name__)
+    
+    # Log all incoming headers to find any auth token Telex might have sent
+    logger.info('Incoming request headers: %s', dict(request.headers))
+    
     payload = None
     raw_body = None
     content_type = (request.headers.get('content-type') or '').lower()
@@ -298,15 +302,26 @@ async def a2a_motivation(request: Request):
                 try:
                     headers = {"Content-Type": "application/json"}
                     
-                    # Try using the api_key we authenticated with as the Bearer token for webhook callback
-                    if api_key:
-                        headers['Authorization'] = f"Bearer {api_key}"
-                        logging.getLogger(__name__).debug('Using incoming api_key as Bearer token for webhook')
+                    # The webhook URL contains a UUID that might be the auth token
+                    # Let's try multiple auth approaches and log what we're sending
                     
-                    logging.getLogger(__name__).info('Sending webhook response to %s (auth: %s)', url, 'Bearer' if api_key else 'none')
+                    # Approach 1: Extract UUID and use as Bearer token
+                    if 'webhooks/' in url:
+                        try:
+                            uuid_token = url.split('webhooks/')[-1].strip('/')
+                            if uuid_token and len(uuid_token) > 10:
+                                headers['Authorization'] = f"Bearer {uuid_token}"
+                                logging.getLogger(__name__).info('Sending webhook with UUID as Bearer: %s...', uuid_token[:20])
+                        except Exception as e:
+                            logging.getLogger(__name__).debug('Failed to extract UUID: %s', e)
+                    
+                    logging.getLogger(__name__).info('Webhook headers being sent: %s', {k: v[:50] if len(str(v)) > 50 else v for k, v in headers.items()})
+                    logging.getLogger(__name__).info('Sending webhook response to %s', url)
                     async with httpx.AsyncClient(timeout=5.0) as client:
                         resp = await client.post(url, json=body, headers=headers)
                         logging.getLogger(__name__).info('Webhook response: %s %s', resp.status_code, (resp.text or '')[:200])
+                        if resp.status_code >= 400:
+                            logging.getLogger(__name__).warning('Webhook auth failed - response headers: %s', dict(resp.headers))
                 except Exception as e:
                     logging.getLogger(__name__).exception('Webhook error: %s', e)
             
