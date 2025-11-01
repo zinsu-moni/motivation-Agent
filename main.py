@@ -69,13 +69,19 @@ def clean_motivation(text: str) -> str:
 
     return " ".join(kept) if kept else t
 
-async def send_webhook_notification(url: str, payload: dict, rpc_id: str) -> bool:
+async def send_webhook_notification(url: str, payload: dict, rpc_id: str, webhook_token: str = None) -> bool:
     """Send webhook notification to Telex callback URL (non-blocking)."""
     try:
         logger = logging.getLogger(__name__)
         logger.info('Background: Sending webhook to %s', url)
         
         headers = {"Content-Type": "application/json"}
+        
+        # If we have a webhook token from Telex, use it in Authorization header
+        if webhook_token:
+            headers['Authorization'] = f"Bearer {webhook_token}"
+            logger.info('Using Telex webhook token for authentication')
+        
         webhook_body = {
             "jsonrpc": "2.0",
             "id": rpc_id,
@@ -328,17 +334,21 @@ async def a2a_motivation(request: Request):
         }
         logging.getLogger(__name__).info('Returning JSON-RPC response id=%s', rpc_id)
         
-        # Extract webhook URL and schedule background notification
+        # Extract webhook URL and token from configuration
         push_url = None
+        webhook_token = None
         if isinstance(payload, dict):
             params = payload.get('params') or {}
             config = params.get('configuration') or {}
             pnc = config.get('pushNotificationConfig') or {}
             push_url = pnc.get('url')
+            webhook_token = pnc.get('token')  # Extract the JWT token Telex provides
+            if webhook_token:
+                logging.getLogger(__name__).info('Found webhook token in pushNotificationConfig')
         
         if push_url:
-            # Schedule webhook notification as background task (don't wait for it)
-            asyncio.create_task(send_webhook_notification(push_url, response, rpc_id))
+            # Schedule webhook notification as background task with token
+            asyncio.create_task(send_webhook_notification(push_url, response, rpc_id, webhook_token))
         
         return JSONResponse(status_code=200, content=rpc_resp)
 @app.get("/workflow")
