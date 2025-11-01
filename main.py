@@ -255,6 +255,45 @@ async def a2a_motivation(request: Request):
         ]
     }
 
+    # For non-blocking mode: send response to webhook URL (fire and forget)
+    if not is_jsonrpc:
+        return JSONResponse(status_code=200, content=response)
+    
+    # For blocking mode or if webhook configured, also attempt webhook push
+    try:
+        push_url = None
+        if isinstance(payload, dict):
+            params = payload.get('params') or {}
+            config = params.get('configuration') or {}
+            pnc = config.get('pushNotificationConfig') or {}
+            push_url = pnc.get('url')
+        
+        if push_url:
+            async def _send_webhook(url: str, body: dict):
+                try:
+                    headers = {"Content-Type": "application/json"}
+                    logging.getLogger(__name__).info('Sending webhook response to %s', url)
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        resp = await client.post(url, json=body, headers=headers)
+                        logging.getLogger(__name__).info('Webhook response: %s', resp.status_code)
+                except Exception as e:
+                    logging.getLogger(__name__).exception('Webhook error: %s', e)
+            
+            # Create webhook body with the response
+            webhook_body = {
+                "jsonrpc": "2.0",
+                "id": rpc_id,
+                "result": response
+            }
+            
+            # Send webhook asynchronously without waiting
+            try:
+                asyncio.create_task(_send_webhook(push_url, webhook_body))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    
     # If the caller used JSON-RPC, reply with a JSON-RPC style response
     if is_jsonrpc:
         rpc_resp = {
@@ -262,7 +301,7 @@ async def a2a_motivation(request: Request):
             "id": rpc_id,
             "result": response
         }
-        logging.getLogger(__name__).info('Returning JSON-RPC response id=%s (truncated output): %s', rpc_id, (cleaned or '')[:200])
+        logging.getLogger(__name__).info('Returning JSON-RPC response id=%s', rpc_id)
         return JSONResponse(status_code=200, content=rpc_resp)
 
     return JSONResponse(status_code=200, content=response)
