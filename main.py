@@ -70,7 +70,10 @@ def clean_motivation(text: str) -> str:
     return " ".join(kept) if kept else t
 
 async def send_webhook_notification(url: str, payload: dict, rpc_id: str, webhook_token: str = None) -> bool:
-    """Send webhook notification to Telex callback URL (non-blocking)."""
+    """Send webhook notification to Telex callback URL (non-blocking).
+    
+    The response should follow A2A format with message parts.
+    """
     try:
         logger = logging.getLogger(__name__)
         logger.info('Background: Sending webhook to %s', url)
@@ -81,15 +84,37 @@ async def send_webhook_notification(url: str, payload: dict, rpc_id: str, webhoo
         if webhook_token:
             headers['Authorization'] = f"Bearer {webhook_token}"
             logger.info('Using Telex webhook token for authentication')
+        else:
+            logger.warning('⚠️ No webhook token found!')
+        
+        # Format the response as A2A message.parts for Telex
+        # This is what Telex expects to display on the UI
+        result_data = {
+            "message": {
+                "kind": "message",
+                "role": "assistant",
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": payload.get("outputs", [{}])[0].get("content", "No motivation generated")
+                    }
+                ]
+            }
+        }
         
         webhook_body = {
             "jsonrpc": "2.0",
             "id": rpc_id,
-            "result": payload
+            "result": result_data
         }
+        
+        logger.debug('Webhook body: %s', str(webhook_body)[:500])
         
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(url, json=webhook_body, headers=headers)
+            logger.info('Webhook response status: %s', resp.status_code)
+            logger.info('Webhook response body: %s', (resp.text or '')[:200])
+            
             if resp.status_code == 200:
                 logger.info('✅ Webhook delivered successfully! Status: %s', resp.status_code)
                 return True
