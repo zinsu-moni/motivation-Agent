@@ -286,11 +286,11 @@ async def a2a_motivation(request: Request):
                 "result": response
             }
             
-            # Send webhook asynchronously without waiting
+            # Send webhook and wait for response (so we can log it)
             try:
-                asyncio.create_task(_send_webhook(push_url, webhook_body))
-            except Exception:
-                pass
+                await _send_webhook(push_url, webhook_body)
+            except Exception as e:
+                logging.getLogger(__name__).exception('Failed to send webhook: %s', e)
     except Exception:
         pass
     
