@@ -310,24 +310,23 @@ async def a2a_motivation(request: Request):
                 try:
                     headers = {"Content-Type": "application/json"}
                     
-                    # Use the Telex Bearer token we received in x-vercel-proxy-signature header
-                    # Try multiple header approaches:
-                    # 1. X-TELEX-API-KEY (custom header shown in CORS headers)
-                    # 2. Authorization: Bearer (standard)
-                    if telex_token:
-                        # Telex CORS headers mention X-TELEX-API-KEY, so try that first
-                        headers['X-TELEX-API-KEY'] = telex_token
-                        headers['Authorization'] = f"Bearer {telex_token}"
-                        logging.getLogger(__name__).info('Using Telex token from x-vercel-proxy-signature: X-TELEX-API-KEY + Bearer headers')
-                        logging.getLogger(__name__).debug('Token full value: %s', telex_token)
+                    # Test 1: Try without any Authorization header
+                    # The webhook URL itself (with the UUID) might be the entire security mechanism
                     
-                    logging.getLogger(__name__).info('Webhook headers being sent: %s', {k: v[:50] if len(str(v)) > 50 else v for k, v in headers.items()})
-                    logging.getLogger(__name__).info('Sending webhook response to %s', url)
+                    logging.getLogger(__name__).info('Webhook headers being sent: %s', headers)
+                    logging.getLogger(__name__).info('Sending webhook response to %s (no auth header)', url)
                     async with httpx.AsyncClient(timeout=5.0) as client:
                         resp = await client.post(url, json=body, headers=headers)
                         logging.getLogger(__name__).info('Webhook response: %s %s', resp.status_code, (resp.text or '')[:200])
                         if resp.status_code >= 400:
-                            logging.getLogger(__name__).warning('Webhook auth failed - response headers: %s', dict(resp.headers))
+                            logging.getLogger(__name__).warning('Webhook failed - trying again with X-TELEX-API-KEY header')
+                            # If no auth fails, try with the token
+                            if telex_token:
+                                headers['X-TELEX-API-KEY'] = telex_token
+                                headers['Authorization'] = f"Bearer {telex_token}"
+                                logging.getLogger(__name__).info('Retrying webhook with auth headers')
+                                resp = await client.post(url, json=body, headers=headers)
+                                logging.getLogger(__name__).info('Webhook retry response: %s %s', resp.status_code, (resp.text or '')[:200])
                 except Exception as e:
                     logging.getLogger(__name__).exception('Webhook error: %s', e)
             
