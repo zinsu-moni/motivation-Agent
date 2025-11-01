@@ -289,63 +289,8 @@ async def a2a_motivation(request: Request):
     if not is_jsonrpc:
         return JSONResponse(status_code=200, content=response)
     
-    # For blocking mode or if webhook configured, also attempt webhook push
-    try:
-        push_url = None
-        push_auth = None
-        push_meta = None
-        if isinstance(payload, dict):
-            params = payload.get('params') or {}
-            config = params.get('configuration') or {}
-            pnc = config.get('pushNotificationConfig') or {}
-            push_url = pnc.get('url')
-            push_auth = pnc.get('authentication') or {}
-            # Also capture any meta/credentials that might contain a token
-            push_meta = payload.get('meta') or params.get('meta') or {}
-            
-            logging.getLogger(__name__).debug('Webhook meta data: %s', push_meta if not isinstance(push_meta, dict) or 'api_key' not in push_meta else {k: ('***' if k == 'api_key' else v) for k, v in push_meta.items()})
-        
-        if push_url:
-            async def _send_webhook(url: str, body: dict, auth_obj: dict, api_key: str = None, telex_token: str = None):
-                try:
-                    headers = {"Content-Type": "application/json"}
-                    
-                    # Test 1: Try without any Authorization header
-                    # The webhook URL itself (with the UUID) might be the entire security mechanism
-                    
-                    logging.getLogger(__name__).info('Webhook headers being sent: %s', headers)
-                    logging.getLogger(__name__).info('Sending webhook response to %s (no auth header)', url)
-                    async with httpx.AsyncClient(timeout=5.0) as client:
-                        resp = await client.post(url, json=body, headers=headers)
-                        logging.getLogger(__name__).info('Webhook response: %s %s', resp.status_code, (resp.text or '')[:200])
-                        if resp.status_code >= 400:
-                            logging.getLogger(__name__).warning('Webhook failed - trying again with X-TELEX-API-KEY header')
-                            # If no auth fails, try with the token
-                            if telex_token:
-                                headers['X-TELEX-API-KEY'] = telex_token
-                                headers['Authorization'] = f"Bearer {telex_token}"
-                                logging.getLogger(__name__).info('Retrying webhook with auth headers')
-                                resp = await client.post(url, json=body, headers=headers)
-                                logging.getLogger(__name__).info('Webhook retry response: %s %s', resp.status_code, (resp.text or '')[:200])
-                except Exception as e:
-                    logging.getLogger(__name__).exception('Webhook error: %s', e)
-            
-            # Create webhook body with the response
-            webhook_body = {
-                "jsonrpc": "2.0",
-                "id": rpc_id,
-                "result": response
-            }
-            
-            # Send webhook and wait for response (so we can log it)
-            try:
-                await _send_webhook(push_url, webhook_body, push_auth, api_key, telex_bearer_token)
-            except Exception as e:
-                logging.getLogger(__name__).exception('Failed to send webhook: %s', e)
-    except Exception:
-        pass
-    
-    # If the caller used JSON-RPC, reply with a JSON-RPC style response
+    # For JSON-RPC mode, immediately return 200 OK to Telex
+    # Then handle webhook push asynchronously (fire and forget)
     if is_jsonrpc:
         rpc_resp = {
             "jsonrpc": "2.0",
@@ -353,9 +298,44 @@ async def a2a_motivation(request: Request):
             "result": response
         }
         logging.getLogger(__name__).info('Returning JSON-RPC response id=%s', rpc_id)
+        
+        # Create a background task to send webhook without blocking the response
+        async def send_webhook_background():
+            try:
+                push_url = None
+                push_auth = None
+                if isinstance(payload, dict):
+                    params = payload.get('params') or {}
+                    config = params.get('configuration') or {}
+                    pnc = config.get('pushNotificationConfig') or {}
+                    push_url = pnc.get('url')
+                    push_auth = pnc.get('authentication') or {}
+                
+                if push_url:
+                    # Simple webhook body - just the result
+                    webhook_body = {
+                        "jsonrpc": "2.0",
+                        "id": rpc_id,
+                        "result": response
+                    }
+                    
+                    headers = {"Content-Type": "application/json"}
+                    
+                    # Try posting without auth first (webhook URL is the secret)
+                    logging.getLogger(__name__).info('Background: Sending webhook to %s', push_url)
+                    try:
+                        async with httpx.AsyncClient(timeout=5.0) as client:
+                            resp = await client.post(push_url, json=webhook_body, headers=headers)
+                            logging.getLogger(__name__).info('Background webhook response: %s', resp.status_code)
+                    except Exception as e:
+                        logging.getLogger(__name__).exception('Background webhook error: %s', e)
+            except Exception as e:
+                logging.getLogger(__name__).exception('Background task error: %s', e)
+        
+        # Schedule background task (don't await it)
+        asyncio.create_task(send_webhook_background())
+        
         return JSONResponse(status_code=200, content=rpc_resp)
-
-    return JSONResponse(status_code=200, content=response)
 @app.get("/workflow")
 async def get_workflow():
     """Return the workflow JSON so you can confirm the deployed workflow."""
