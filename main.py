@@ -166,6 +166,12 @@ async def a2a_motivation(request: Request):
             if 'params' in sanitized and isinstance(sanitized['params'], dict):
                 config = sanitized['params'].get('configuration', {})
                 logger.debug('Full configuration received: %s', config)
+                
+                # Also log the pushNotificationConfig authentication details
+                pnc = config.get('pushNotificationConfig', {})
+                auth = pnc.get('authentication', {})
+                if auth:
+                    logger.debug('Webhook authentication object: %s', auth)
             
             meta = sanitized.get('meta')
             if isinstance(meta, dict) and 'api_key' in meta:
@@ -262,16 +268,34 @@ async def a2a_motivation(request: Request):
     # For blocking mode or if webhook configured, also attempt webhook push
     try:
         push_url = None
+        push_auth = None
         if isinstance(payload, dict):
             params = payload.get('params') or {}
             config = params.get('configuration') or {}
             pnc = config.get('pushNotificationConfig') or {}
             push_url = pnc.get('url')
+            push_auth = pnc.get('authentication') or {}
         
         if push_url:
-            async def _send_webhook(url: str, body: dict):
+            async def _send_webhook(url: str, body: dict, auth_obj: dict):
                 try:
                     headers = {"Content-Type": "application/json"}
+                    
+                    # Check if authentication object has credentials or token
+                    if isinstance(auth_obj, dict):
+                        credentials = auth_obj.get('credentials')
+                        schemes = auth_obj.get('schemes', [])
+                        
+                        if credentials:
+                            logging.getLogger(__name__).debug('Found credentials in auth object: %s', type(credentials))
+                            if isinstance(credentials, str):
+                                headers['Authorization'] = credentials
+                            elif isinstance(credentials, dict):
+                                token = credentials.get('token') or credentials.get('bearer')
+                                if token:
+                                    headers['Authorization'] = f"Bearer {token}"
+                        elif 'Bearer' in schemes:
+                            logging.getLogger(__name__).debug('Bearer auth expected but no credentials found in auth object')
                     
                     logging.getLogger(__name__).info('Sending webhook response to %s', url)
                     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -289,7 +313,7 @@ async def a2a_motivation(request: Request):
             
             # Send webhook and wait for response (so we can log it)
             try:
-                await _send_webhook(push_url, webhook_body)
+                await _send_webhook(push_url, webhook_body, push_auth)
             except Exception as e:
                 logging.getLogger(__name__).exception('Failed to send webhook: %s', e)
     except Exception:
