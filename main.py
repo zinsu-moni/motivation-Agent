@@ -326,7 +326,11 @@ async def a2a_motivation(request: Request):
                     try:
                         async with httpx.AsyncClient(timeout=5.0) as client:
                             resp = await client.post(push_url, json=webhook_body, headers=headers)
-                            logging.getLogger(__name__).info('Background webhook response: %s', resp.status_code)
+                            logging.getLogger(__name__).info('Background webhook response: %s %s', resp.status_code, (resp.text or '')[:100])
+                            if resp.status_code == 200:
+                                logging.getLogger(__name__).info('✅ Webhook delivered successfully!')
+                            else:
+                                logging.getLogger(__name__).warning('⚠️ Webhook failed with status %s', resp.status_code)
                     except Exception as e:
                         logging.getLogger(__name__).exception('Background webhook error: %s', e)
             except Exception as e:
