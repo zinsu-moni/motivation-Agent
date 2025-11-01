@@ -129,6 +129,14 @@ async def a2a_motivation(request: Request):
     # Log all incoming headers to find any auth token Telex might have sent
     logger.info('Incoming request headers: %s', dict(request.headers))
     
+    # Extract the Bearer token that Telex sent us - we'll use it for webhook callback
+    telex_bearer_token = request.headers.get('x-vercel-proxy-signature')
+    if telex_bearer_token and telex_bearer_token.startswith('Bearer '):
+        telex_bearer_token = telex_bearer_token[7:]  # Remove "Bearer " prefix
+        logger.info('Found Telex Bearer token in x-vercel-proxy-signature header')
+    else:
+        telex_bearer_token = None
+    
     payload = None
     raw_body = None
     content_type = (request.headers.get('content-type') or '').lower()
@@ -298,22 +306,14 @@ async def a2a_motivation(request: Request):
             logging.getLogger(__name__).debug('Webhook meta data: %s', push_meta if not isinstance(push_meta, dict) or 'api_key' not in push_meta else {k: ('***' if k == 'api_key' else v) for k, v in push_meta.items()})
         
         if push_url:
-            async def _send_webhook(url: str, body: dict, auth_obj: dict, api_key: str = None):
+            async def _send_webhook(url: str, body: dict, auth_obj: dict, api_key: str = None, telex_token: str = None):
                 try:
                     headers = {"Content-Type": "application/json"}
                     
-                    # The webhook URL contains a UUID that might be the auth token
-                    # Let's try multiple auth approaches and log what we're sending
-                    
-                    # Approach 1: Extract UUID and use as Bearer token
-                    if 'webhooks/' in url:
-                        try:
-                            uuid_token = url.split('webhooks/')[-1].strip('/')
-                            if uuid_token and len(uuid_token) > 10:
-                                headers['Authorization'] = f"Bearer {uuid_token}"
-                                logging.getLogger(__name__).info('Sending webhook with UUID as Bearer: %s...', uuid_token[:20])
-                        except Exception as e:
-                            logging.getLogger(__name__).debug('Failed to extract UUID: %s', e)
+                    # Use the Telex Bearer token we received in x-vercel-proxy-signature header
+                    if telex_token:
+                        headers['Authorization'] = f"Bearer {telex_token}"
+                        logging.getLogger(__name__).info('Using Telex Bearer token from x-vercel-proxy-signature for webhook auth')
                     
                     logging.getLogger(__name__).info('Webhook headers being sent: %s', {k: v[:50] if len(str(v)) > 50 else v for k, v in headers.items()})
                     logging.getLogger(__name__).info('Sending webhook response to %s', url)
@@ -334,7 +334,7 @@ async def a2a_motivation(request: Request):
             
             # Send webhook and wait for response (so we can log it)
             try:
-                await _send_webhook(push_url, webhook_body, push_auth, api_key)
+                await _send_webhook(push_url, webhook_body, push_auth, api_key, telex_bearer_token)
             except Exception as e:
                 logging.getLogger(__name__).exception('Failed to send webhook: %s', e)
     except Exception:
