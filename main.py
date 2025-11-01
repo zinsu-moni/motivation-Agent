@@ -311,9 +311,15 @@ async def a2a_motivation(request: Request):
                     headers = {"Content-Type": "application/json"}
                     
                     # Use the Telex Bearer token we received in x-vercel-proxy-signature header
+                    # Try multiple header approaches:
+                    # 1. X-TELEX-API-KEY (custom header shown in CORS headers)
+                    # 2. Authorization: Bearer (standard)
                     if telex_token:
+                        # Telex CORS headers mention X-TELEX-API-KEY, so try that first
+                        headers['X-TELEX-API-KEY'] = telex_token
                         headers['Authorization'] = f"Bearer {telex_token}"
-                        logging.getLogger(__name__).info('Using Telex Bearer token from x-vercel-proxy-signature for webhook auth')
+                        logging.getLogger(__name__).info('Using Telex token from x-vercel-proxy-signature: X-TELEX-API-KEY + Bearer headers')
+                        logging.getLogger(__name__).debug('Token full value: %s', telex_token)
                     
                     logging.getLogger(__name__).info('Webhook headers being sent: %s', {k: v[:50] if len(str(v)) > 50 else v for k, v in headers.items()})
                     logging.getLogger(__name__).info('Sending webhook response to %s', url)
