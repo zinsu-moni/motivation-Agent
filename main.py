@@ -257,96 +257,6 @@ async def a2a_motivation(request: Request):
         ]
     }
 
-    # Best-effort push callback: if caller provided a pushNotificationConfig.url, POST the result to it.
-    try:
-        push_url = None
-        pnc = {}
-        if isinstance(payload, dict):
-            params = payload.get('params') or {}
-            config = params.get('configuration') or {}
-            pnc = config.get('pushNotificationConfig') or {}
-            push_url = pnc.get('url')
-
-        if push_url:
-            async def _post_push(url: str, body: dict, pnc_config: dict, agent_api_key: str, logger=logging.getLogger(__name__)):
-                last = {
-                    "ts": datetime.utcnow().isoformat() + 'Z',
-                    "url": url,
-                    "status": None,
-                    "resp": None,
-                    "error": None
-                }
-                try:
-                    # Determine headers for webhook POST
-                    headers = {"Content-Type": "application/json"}
-                    
-                    # Check for Telex auth credentials in the incoming config
-                    auth = pnc_config.get('authentication') or {}
-                    webhook_token = None
-                    
-                    # Telex format: auth.schemes = ["TelexApiKey"] and auth.credentials = token
-                    if auth.get('schemes') in [['TelexApiKey'], ['Bearer']]:
-                        webhook_token = auth.get('credentials')
-                        if webhook_token:
-                            logger.debug('Using credentials from pushNotificationConfig.authentication')
-                    
-                    # Fallback to environment variable
-                    if not webhook_token:
-                        webhook_token = os.getenv('TELEX_WEBHOOK_TOKEN')
-                        if webhook_token:
-                            logger.debug('Using TELEX_WEBHOOK_TOKEN from environment')
-                    
-                    # Last fallback to agent API key
-                    if not webhook_token:
-                        webhook_token = agent_api_key
-                        logger.debug('Using agent API key as fallback')
-                    
-                    if webhook_token:
-                        headers['Authorization'] = f"Bearer {webhook_token}"
-                    else:
-                        logger.warning('No webhook authentication token available')
-
-                    logger.info('Posting push notification to %s', url)
-                    async with httpx.AsyncClient(timeout=5.0) as client:
-                        resp = await client.post(url, json=body, headers=headers)
-                        last['status'] = resp.status_code
-                        last['resp'] = (resp.text or '')[:1000]
-                        logger.info('Push notification posted: %s %s', resp.status_code, last['resp'][:300])
-                except Exception as e:
-                    last['error'] = str(e)
-                    logger.exception('Failed to post push notification to %s: %s', url, e)
-                # store the last push attempt in-memory for quick diagnostics
-                try:
-                    _LAST_PUSH['last'] = last
-                except Exception:
-                    logger.debug('Failed to record last push status')
-
-            # Create push body in A2A webhook format
-            # According to A2A spec: webhook receives the result directly
-            push_body = {
-                "jsonrpc": "2.0",
-                "method": "message/response",
-                "params": {
-                    "requestId": rpc_id,
-                    "message": {
-                        "kind": "message",
-                        "role": "assistant",
-                        "parts": [{"kind": "text", "text": cleaned}],
-                        "messageId": resp_id
-                    }
-                }
-            }
-
-            # Actually await the push (with timeout) so we can ensure delivery and record status
-            try:
-                await asyncio.wait_for(_post_push(push_url, push_body, pnc, api_key), timeout=6.0)
-            except asyncio.TimeoutError:
-                logging.getLogger(__name__).warning('Push notification timed out after 6s')
-            except Exception as e:
-                logging.getLogger(__name__).exception('Error executing push notification: %s', e)
-    except Exception:
-        logging.getLogger(__name__).exception('Error preparing push notification')
-
     # If the caller used JSON-RPC, reply with a JSON-RPC style response
     if is_jsonrpc:
         rpc_resp = {
@@ -358,8 +268,6 @@ async def a2a_motivation(request: Request):
         return JSONResponse(status_code=200, content=rpc_resp)
 
     return JSONResponse(status_code=200, content=response)
-
-
 @app.get("/workflow")
 async def get_workflow():
     """Return the workflow JSON so you can confirm the deployed workflow."""
