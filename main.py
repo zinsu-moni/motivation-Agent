@@ -171,7 +171,19 @@ async def a2a_motivation(request: Request):
                 pnc = config.get('pushNotificationConfig', {})
                 auth = pnc.get('authentication', {})
                 if auth:
-                    logger.debug('Webhook authentication object: %s', auth)
+                    logger.info('Webhook authentication object: %s', auth)
+                    logger.info('All auth fields: %s', list(auth.keys()) if isinstance(auth, dict) else type(auth))
+                
+                # Check for any token-like fields in params
+                params_keys = list(sanitized['params'].keys())
+                logger.info('Params keys: %s', params_keys)
+                
+                # Check for any token-like fields
+                for key in params_keys:
+                    val = sanitized['params'][key]
+                    if isinstance(val, (str, dict)) and len(str(val)) < 500:
+                        if 'token' in key.lower() or 'auth' in key.lower() or 'secret' in key.lower():
+                            logger.info('Found potential auth field %s: %s', key, val)
             
             meta = sanitized.get('meta')
             if isinstance(meta, dict) and 'api_key' in meta:
@@ -282,14 +294,16 @@ async def a2a_motivation(request: Request):
             logging.getLogger(__name__).debug('Webhook meta data: %s', push_meta if not isinstance(push_meta, dict) or 'api_key' not in push_meta else {k: ('***' if k == 'api_key' else v) for k, v in push_meta.items()})
         
         if push_url:
-            async def _send_webhook(url: str, body: dict, auth_obj: dict):
+            async def _send_webhook(url: str, body: dict, auth_obj: dict, api_key: str = None):
                 try:
                     headers = {"Content-Type": "application/json"}
                     
-                    # Don't send any Authorization header - the webhook URL itself is the authentication
-                    # (the UUID in the URL is secret and only we were given this URL)
+                    # Try using the api_key we authenticated with as the Bearer token for webhook callback
+                    if api_key:
+                        headers['Authorization'] = f"Bearer {api_key}"
+                        logging.getLogger(__name__).debug('Using incoming api_key as Bearer token for webhook')
                     
-                    logging.getLogger(__name__).info('Sending webhook response to %s (no auth header)', url)
+                    logging.getLogger(__name__).info('Sending webhook response to %s (auth: %s)', url, 'Bearer' if api_key else 'none')
                     async with httpx.AsyncClient(timeout=5.0) as client:
                         resp = await client.post(url, json=body, headers=headers)
                         logging.getLogger(__name__).info('Webhook response: %s %s', resp.status_code, (resp.text or '')[:200])
@@ -305,7 +319,7 @@ async def a2a_motivation(request: Request):
             
             # Send webhook and wait for response (so we can log it)
             try:
-                await _send_webhook(push_url, webhook_body, push_auth)
+                await _send_webhook(push_url, webhook_body, push_auth, api_key)
             except Exception as e:
                 logging.getLogger(__name__).exception('Failed to send webhook: %s', e)
     except Exception:
