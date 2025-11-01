@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 import json
 from pathlib import Path
 import logging
+import time
 
 app = FastAPI()
 
@@ -67,6 +68,34 @@ def clean_motivation(text: str) -> str:
             break
 
     return " ".join(kept) if kept else t
+
+async def send_webhook_notification(url: str, payload: dict, rpc_id: str) -> bool:
+    """Send webhook notification to Telex callback URL (non-blocking)."""
+    try:
+        logger = logging.getLogger(__name__)
+        logger.info('Background: Sending webhook to %s', url)
+        
+        headers = {"Content-Type": "application/json"}
+        webhook_body = {
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "result": payload
+        }
+        
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(url, json=webhook_body, headers=headers)
+            if resp.status_code == 200:
+                logger.info('✅ Webhook delivered successfully! Status: %s', resp.status_code)
+                return True
+            else:
+                logger.warning('⚠️ Webhook failed with status %s: %s', resp.status_code, (resp.text or '')[:100])
+                return False
+    except asyncio.TimeoutError:
+        logging.getLogger(__name__).error('Webhook timeout after 5s')
+        return False
+    except Exception as e:
+        logging.getLogger(__name__).exception('Webhook error: %s', e)
+        return False
 
 # Mount the static folder so you can open /static/index.html in the browser for testing
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -299,45 +328,17 @@ async def a2a_motivation(request: Request):
         }
         logging.getLogger(__name__).info('Returning JSON-RPC response id=%s', rpc_id)
         
-        # Create a background task to send webhook without blocking the response
-        async def send_webhook_background():
-            try:
-                push_url = None
-                push_auth = None
-                if isinstance(payload, dict):
-                    params = payload.get('params') or {}
-                    config = params.get('configuration') or {}
-                    pnc = config.get('pushNotificationConfig') or {}
-                    push_url = pnc.get('url')
-                    push_auth = pnc.get('authentication') or {}
-                
-                if push_url:
-                    # Simple webhook body - just the result
-                    webhook_body = {
-                        "jsonrpc": "2.0",
-                        "id": rpc_id,
-                        "result": response
-                    }
-                    
-                    headers = {"Content-Type": "application/json"}
-                    
-                    # Try posting without auth first (webhook URL is the secret)
-                    logging.getLogger(__name__).info('Background: Sending webhook to %s', push_url)
-                    try:
-                        async with httpx.AsyncClient(timeout=5.0) as client:
-                            resp = await client.post(push_url, json=webhook_body, headers=headers)
-                            logging.getLogger(__name__).info('Background webhook response: %s %s', resp.status_code, (resp.text or '')[:100])
-                            if resp.status_code == 200:
-                                logging.getLogger(__name__).info('✅ Webhook delivered successfully!')
-                            else:
-                                logging.getLogger(__name__).warning('⚠️ Webhook failed with status %s', resp.status_code)
-                    except Exception as e:
-                        logging.getLogger(__name__).exception('Background webhook error: %s', e)
-            except Exception as e:
-                logging.getLogger(__name__).exception('Background task error: %s', e)
+        # Extract webhook URL and schedule background notification
+        push_url = None
+        if isinstance(payload, dict):
+            params = payload.get('params') or {}
+            config = params.get('configuration') or {}
+            pnc = config.get('pushNotificationConfig') or {}
+            push_url = pnc.get('url')
         
-        # Schedule background task (don't await it)
-        asyncio.create_task(send_webhook_background())
+        if push_url:
+            # Schedule webhook notification as background task (don't wait for it)
+            asyncio.create_task(send_webhook_notification(push_url, response, rpc_id))
         
         return JSONResponse(status_code=200, content=rpc_resp)
 @app.get("/workflow")
