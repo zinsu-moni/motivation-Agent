@@ -2,9 +2,11 @@
 Motivation Service - Generates motivational content using OpenRouter AI
 """
 import re
+import asyncio
 import logging
 from typing import Optional
 from openai import AsyncOpenAI
+from httpx import Timeout
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +32,14 @@ class MotivationService:
         self.base_url = base_url
         self.model = model
         
+        # Create AsyncOpenAI client with timeout to prevent hanging
         self.client = AsyncOpenAI(
             api_key=api_key,
-            base_url=base_url
+            base_url=base_url,
+            timeout=Timeout(30.0)  # 30 second timeout
         )
         
-        logger.info(f"✅ MotivationService initialized with model: {model}")
+        logger.info(f"[SERVICE] MotivationService initialized with model: {model}, timeout: 30s")
     
     async def generate_motivation(self, user_input: str) -> str:
         """
@@ -62,16 +66,26 @@ class MotivationService:
             
             # Call OpenRouter via OpenAI client
             logger.info(f"[SERVICE] Making API call...")
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_input}
-                ],
-                temperature=0.7,
-                max_tokens=150,
-            )
-            logger.info(f"[SERVICE] API call completed")
+            try:
+                response = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_input}
+                        ],
+                        temperature=0.7,
+                        max_tokens=150,
+                    ),
+                    timeout=25.0  # 25 second timeout (leaves buffer before client timeout)
+                )
+                logger.info(f"[SERVICE] API call completed successfully")
+            except asyncio.TimeoutError:
+                logger.error(f"[SERVICE] API call timed out after 25 seconds")
+                raise
+            except Exception as api_error:
+                logger.error(f"[SERVICE] API call failed: {type(api_error).__name__}: {api_error}")
+                raise
             
             # Extract response
             logger.info(f"[SERVICE] Response type: {type(response)}")
