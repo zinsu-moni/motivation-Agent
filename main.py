@@ -269,50 +269,27 @@ async def a2a_motivation(request: Request):
     try:
         push_url = None
         push_auth = None
+        push_meta = None
         if isinstance(payload, dict):
             params = payload.get('params') or {}
             config = params.get('configuration') or {}
             pnc = config.get('pushNotificationConfig') or {}
             push_url = pnc.get('url')
             push_auth = pnc.get('authentication') or {}
+            # Also capture any meta/credentials that might contain a token
+            push_meta = payload.get('meta') or params.get('meta') or {}
+            
+            logging.getLogger(__name__).debug('Webhook meta data: %s', push_meta if not isinstance(push_meta, dict) or 'api_key' not in push_meta else {k: ('***' if k == 'api_key' else v) for k, v in push_meta.items()})
         
         if push_url:
             async def _send_webhook(url: str, body: dict, auth_obj: dict):
                 try:
                     headers = {"Content-Type": "application/json"}
                     
-                    # Check if authentication object has credentials or token
-                    token_found = False
-                    if isinstance(auth_obj, dict):
-                        credentials = auth_obj.get('credentials')
-                        schemes = auth_obj.get('schemes', [])
-                        
-                        if credentials:
-                            logging.getLogger(__name__).debug('Found credentials in auth object: %s', type(credentials))
-                            if isinstance(credentials, str):
-                                headers['Authorization'] = credentials
-                                token_found = True
-                            elif isinstance(credentials, dict):
-                                token = credentials.get('token') or credentials.get('bearer')
-                                if token:
-                                    headers['Authorization'] = f"Bearer {token}"
-                                    token_found = True
-                        elif 'Bearer' in schemes:
-                            logging.getLogger(__name__).debug('Bearer auth expected but no credentials in auth object')
+                    # Don't send any Authorization header - the webhook URL itself is the authentication
+                    # (the UUID in the URL is secret and only we were given this URL)
                     
-                    # If no credentials provided, try extracting UUID from webhook URL as the token
-                    # Format: https://ping.telex.im/v1/a2a/webhooks/{uuid}
-                    if not token_found and 'webhooks/' in url:
-                        try:
-                            uuid_token = url.split('webhooks/')[-1].strip('/')
-                            if uuid_token and len(uuid_token) > 10:  # reasonable UUID length
-                                headers['Authorization'] = f"Bearer {uuid_token}"
-                                logging.getLogger(__name__).debug('Using webhook URL UUID as Bearer token: %s...', uuid_token[:12])
-                                token_found = True
-                        except Exception as e:
-                            logging.getLogger(__name__).debug('Failed to extract UUID from webhook URL: %s', e)
-                    
-                    logging.getLogger(__name__).info('Sending webhook response to %s (auth: %s)', url, 'Bearer' if token_found else 'none')
+                    logging.getLogger(__name__).info('Sending webhook response to %s (no auth header)', url)
                     async with httpx.AsyncClient(timeout=5.0) as client:
                         resp = await client.post(url, json=body, headers=headers)
                         logging.getLogger(__name__).info('Webhook response: %s %s', resp.status_code, (resp.text or '')[:200])
