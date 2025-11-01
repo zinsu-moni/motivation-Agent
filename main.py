@@ -249,10 +249,8 @@ async def a2a_motivation(request: Request):
         "status": "success",
         "outputs": [
             {
-                "type": "message",
-                "content": cleaned,
-                # Provide a `message`/`parts` shape which many A2A controllers expect
-                "message": {"parts": [{"kind": "text", "text": cleaned}]}
+                "type": "text",
+                "content": cleaned
             }
         ]
     }
@@ -261,10 +259,10 @@ async def a2a_motivation(request: Request):
     if is_jsonrpc:
         rpc_resp = {
             "jsonrpc": "2.0",
-            "id": resp_id,
+            "id": rpc_id,
             "result": response
         }
-        logging.getLogger(__name__).info('Returning JSON-RPC response id=%s (truncated output): %s', resp_id, (cleaned or '')[:200])
+        logging.getLogger(__name__).info('Returning JSON-RPC response id=%s (truncated output): %s', rpc_id, (cleaned or '')[:200])
         return JSONResponse(status_code=200, content=rpc_resp)
 
     return JSONResponse(status_code=200, content=response)
