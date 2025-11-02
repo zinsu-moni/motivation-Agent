@@ -47,15 +47,21 @@
           if (useA2A) {
             const url = '/a2a/motivation';
             
-            // Build proper A2A JSON-RPC 2.0 request
+            // Build proper A2A JSON-RPC 2.0 request with correct format
             const body = {
               jsonrpc: "2.0",
               id: "test-" + Math.random().toString(36).substr(2, 9),
               method: "message/send",
               params: {
                 message: {
+                  kind: "message",
                   role: "user",
-                  content: rawMessage
+                  parts: [
+                    {
+                      kind: "text",
+                      text: rawMessage
+                    }
+                  ]
                 }
               }
             };
